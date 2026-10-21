@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QueenCosy - ระบบสแกนใบงาน & คำนวณค่าแรงช่างอัตโนมัติ (AI Payroll Scanner)</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- SheetJS (xlsx) Local & CDN Fallback -->
+  <script src="xlsx.full.min.js"></script>
+  <script>
+    if (typeof window.XLSX === 'undefined') {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"><\/script>');
+    }
+  </script>
+  <!-- Supabase JS Client Local & CDN Fallback -->
+  <script src="supabase.min.js"></script>
+  <script>
+    if (typeof window.supabase === 'undefined') {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');
+    }
+  </script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col">
+
+  <!-- ========================================================================= -->
+  <!-- TOP HEADER & QUICK EXCEL TEMPLATE BAR                                     -->
+  <!-- ========================================================================= -->
+  <header class="bg-white/95 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50 shadow-sm no-print">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between py-3 gap-3">
+        <!-- Brand Logo & Title -->
+        <div class="flex items-center gap-3">
+          <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-emerald-600 via-teal-600 to-indigo-600 flex items-center justify-center text-white text-2xl shadow-md shadow-emerald-500/20">
+            🧾
+          </div>
+          <div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <h1 class="text-base sm:text-lg font-black tracking-tight text-slate-900">
+                QueenCosy <span class="text-transparent bg-clip-text bg-gradient-to-r from-emerald-600 to-indigo-600">AI Payroll & Job Sheet Scanner</span>
+              </h1>
+              <span class="px-2 py-0.5 text-[10px] font-black rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                แยกอิสระ ปลอดภัย 100%
+              </span>
+              <span id="badge-api-status" class="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+                🔑 รอตั้งค่า Gemini API Key
+              </span>
+            </div>
+            <p class="text-xs text-slate-500 mt-0.5">
+              ระบบถ่ายรูป/อ่านใบงานช่างเย็บ-ช่างหุ้ม จับคู่รหัส SKU อัตโนมัติ และตัดวิกจ่ายค่าแรง 15 วัน (1–15 จ่าย 20 | 16–สิ้นเดือน จ่าย 5)
+            </p>
+          </div>
+        </div>
+
+        <!-- Prominent Action Buttons: Download Template & Import Excel -->
+        <div class="flex items-center gap-2 flex-wrap">
+          <button id="btn-header-download-template" class="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center gap-1.5 cursor-pointer">
+            <span>📥 ดาวน์โหลด Excel Template จับคู่ SKU/ช่าง</span>
+          </button>
+          <label for="file-header-import-mapping" class="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center gap-1.5 cursor-pointer">
+            <span>📤 นำเข้าไฟล์ Excel จับคู่</span>
+          </label>
+          <input type="file" id="file-header-import-mapping" accept=".xlsx,.xls" class="hidden">
+        </div>
+      </div>
+
+      <!-- Navigation Tabs -->
+      <div class="flex border-t border-slate-100 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+        <button class="nav-tab-btn py-3 px-4 text-xs sm:text-sm font-black border-b-2 border-emerald-600 text-emerald-700 flex items-center gap-2 whitespace-nowrap transition-colors" data-tab="mapping">
+          <span>🔄 1. ตารางจับคู่ SKU / ชื่อช่าง & ตั้งค่า Gemini API</span>
+        </button>
+        <button class="nav-tab-btn py-3 px-4 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-2 whitespace-nowrap transition-colors" data-tab="scanner">
+          <span>📸 2. ถ่ายรูปใบงานด่วน / อัปโหลด (100+ ใบ/วัน)</span>
+          <span id="badge-queue-count" class="px-1.5 py-0.5 text-[10px] font-black rounded-full bg-slate-200 text-slate-700">0</span>
+        </button>
+        <button class="nav-tab-btn py-3 px-4 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-2 whitespace-nowrap transition-colors" data-tab="review">
+          <span>🔍 3. ตรวจสอบใบงานเทียบข้าง (Review & Verify)</span>
+          <span id="badge-sheets-count" class="px-1.5 py-0.5 text-[10px] font-black rounded-full bg-blue-100 text-blue-800">0 ใบ</span>
+        </button>
+        <button class="nav-tab-btn py-3 px-4 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-2 whitespace-nowrap transition-colors" data-tab="payroll">
+          <span>💰 4. สรุปงวดจ่ายค่าแรง 15 วัน & พิมพ์สลิป</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ========================================================================= -->
+  <!-- MAIN CONTENT CONTAINER                                                    -->
+  <!-- ========================================================================= -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 no-print">
+
+    <!-- ======================================================================= -->
+    <!-- TAB 1: 🔄 MAPPING (Excel Template, SKU Alias, Worker Alias, Gemini API) -->
+    <!-- ======================================================================= -->
+    <div id="tab-panel-mapping" class="tab-panel space-y-6">
+
+      <!-- Top Hero Card: Excel Template Download & Import for Staff -->
+      <div class="bg-gradient-to-br from-emerald-900 via-teal-900 to-slate-900 text-white rounded-3xl p-6 shadow-xl border border-emerald-700/50">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+          <div class="lg:col-span-7 space-y-2.5">
+            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-xs font-bold">
+              <span>✨ สำหรับเจ้าหน้าที่เตรียมข้อมูลจับคู่ (Excel Template)</span>
+            </div>
+            <h2 class="text-xl sm:text-2xl font-black leading-tight">
+              ดาวน์โหลดไฟล์ Excel ต้นแบบ เพื่อกรอกชื่อสินค้า & ชื่อช่างตามใบงาน
+            </h2>
+            <p class="text-xs sm:text-sm text-emerald-100/90 leading-relaxed">
+              ในไฟล์ Excel มีรหัสโมเดลจริงทั้ง <strong>18 รุ่น (พร้อมเรทค่าหุ้ม/ค่าเย็บ)</strong> และรายชื่อช่างจริงทั้ง <strong>23 คน</strong> เตรียมไว้ให้แล้ว เจ้าหน้าที่สามารถเปิดใน Excel เพื่อพิมพ์คำที่ช่างชอบเขียนในใบงาน (เช่น <code class="bg-white/10 px-1.5 py-0.5 rounded">3&lt;&gt;11</code>, <code class="bg-white/10 px-1.5 py-0.5 rounded">3&lt;&gt;2 lit</code>, <code class="bg-white/10 px-1.5 py-0.5 rounded">st []</code>, <code class="bg-white/10 px-1.5 py-0.5 rounded">Blai Morn</code>) แล้วนำกลับมาอัปโหลดเข้าเว็บได้ทันที!
+            </p>
+            <div class="flex flex-wrap items-center gap-3 pt-2">
+              <button id="btn-hero-download-template" class="px-5 py-3 bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-black text-sm rounded-2xl shadow-lg shadow-emerald-950/50 transition-all flex items-center gap-2 cursor-pointer">
+                <span class="text-lg">📥</span>
+                <span>1. ดาวน์โหลดไฟล์ Excel Template (.xlsx)</span>
+              </button>
+              <label for="file-hero-import-mapping" class="px-5 py-3 bg-white/15 hover:bg-white/25 text-white border border-white/30 font-bold text-sm rounded-2xl shadow-lg transition-all flex items-center gap-2 cursor-pointer">
+                <span class="text-lg">📤</span>
+                <span>2. อัปโหลดไฟล์ Excel ที่กรอกเสร็จแล้ว</span>
+              </label>
+              <input type="file" id="file-hero-import-mapping" accept=".xlsx,.xls" class="hidden">
+              <button id="btn-sync-cloud-master" class="px-4 py-3 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-200 border border-cyan-400/30 font-bold text-xs rounded-2xl transition-all flex items-center gap-1.5 cursor-pointer" title="ดึงเรทค่าแรงและชื่อช่างล่าสุดจาก Google Sheets ของระบบหลัก">
+                <span>🔄 ซิงค์เรทค่าแรงล่าสุดจาก Google Sheets</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Gemini API Key Setup Card -->
+          <div class="lg:col-span-5 bg-white/10 backdrop-blur-md rounded-2xl p-5 border border-white/15 space-y-3">
+            <div class="flex items-center justify-between">
+              <h3 class="font-black text-sm sm:text-base flex items-center gap-2 text-amber-300">
+                <span>🔑 ตั้งค่า Google Gemini API Key</span>
+              </h3>
+              <span id="api-verify-pill" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-white/10 text-slate-200">
+                ยังไม่ได้ตรวจสอบ
+              </span>
+            </div>
+            <p class="text-xs text-slate-300">
+              ใช้สำหรับให้ AI อ่านลายมือชื่อช่าง, รหัสสินค้าที่มีสัญลักษณ์ (◊, □) และตารางใบงานจากรูปถ่ายอัตโนมัติ
+            </p>
+            <div class="space-y-2">
+              <div class="relative">
+                <input type="password" id="input-gemini-api-key" placeholder="วาง Gemini API Key ที่นี่ (เช่น AIzaSy...)" class="w-full px-3.5 py-2.5 pr-16 text-xs font-mono rounded-xl bg-slate-900/90 border border-white/20 text-white placeholder-slate-400 focus:ring-2 focus:ring-emerald-400 outline-none">
+                <button type="button" id="btn-toggle-key-visibility" class="absolute right-2.5 top-2 text-[11px] font-bold text-slate-300 hover:text-white px-2 py-0.5 rounded bg-white/10">
+                  แสดง
+                </button>
+              </div>
+              <div class="flex items-center gap-2">
+                <select id="select-gemini-model" class="px-3 py-2 text-xs font-bold rounded-xl bg-slate-900/90 border border-white/20 text-white outline-none">
+                  <option value="gemini-2.5-flash">⚡ gemini-2.5-flash (แนะนำ - แม่นยำ & เร็ว)</option>
+                  <option value="gemini-2.0-flash">🚀 gemini-2.0-flash (ความเร็วสูง)</option>
+                  <option value="gemini-1.5-flash">🤖 gemini-1.5-flash (มาตรฐาน)</option>
+                </select>
+                <button type="button" id="btn-verify-gemini-api" class="flex-1 py-2 px-4 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs rounded-xl shadow transition-all flex items-center justify-center gap-1.5 cursor-pointer">
+                  <span>🔍 บันทึก & ตรวจเช็ค API</span>
+                </button>
+              </div>
+            </div>
+            <div id="box-api-check-result" class="hidden p-2.5 rounded-xl text-xs font-bold"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Interactive Live Test Matcher Bar -->
+      <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <span class="text-xl">🧪</span>
+          <div>
+            <h3 class="text-xs sm:text-sm font-black text-slate-900">ทดสอบพิมพ์คำในใบงานเพื่อเช็คการจับคู่ (Live Matcher Test)</h3>
+            <p class="text-[11px] text-slate-500">ลองพิมพ์คำที่ช่างเขียน เช่น <code class="text-indigo-600 font-bold">3 &lt;&gt; 2 lit</code>, <code class="text-indigo-600 font-bold">3 ◊ 11 (LN3)</code>, <code class="text-indigo-600 font-bold">st สี่เหลี่ยม</code> หรือ <code class="text-indigo-600 font-bold">311 Lit</code></p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 flex-1 max-w-xl">
+          <input type="text" id="input-live-test-sku" placeholder="พิมพ์คำในใบงาน เช่น 3 <> 2 lit หรือ st สี่เหลี่ยม..." class="flex-1 px-3.5 py-2 text-xs font-bold rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500 outline-none">
+          <div id="badge-live-test-result" class="px-3.5 py-2 rounded-xl bg-slate-100 border border-slate-200 text-xs font-bold text-slate-700 whitespace-nowrap">
+            ผลลัพธ์จะแสดงที่นี่
+          </div>
+        </div>
+      </div>
+
+      <!-- Two-Column Mapping Tables: 1. SKU Mapping | 2. Worker Mapping -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- Left 7 Cols: SKU Mapping Table -->
+        <div class="lg:col-span-7 bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4 flex flex-col">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+            <div>
+              <h3 class="font-black text-base text-slate-900 flex items-center gap-2">
+                <span>🛋️ 1. ตารางจับคู่รหัสสินค้า (SKU Mapping & อัตราค่าแรง)</span>
+                <span id="count-sku-models" class="px-2 py-0.5 text-[11px] font-black rounded-full bg-indigo-100 text-indigo-800">18 รุ่น</span>
+              </h3>
+              <p class="text-xs text-slate-500 mt-0.5">
+                กำหนดคำย่อหรือสัญลักษณ์ที่ช่างเขียนในใบงาน (คั่นแต่ละคำด้วยเครื่องหมายจุลภาค <code class="font-bold text-slate-800">,</code>)
+              </p>
+            </div>
+            <button id="btn-save-sku-table" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm transition-colors flex items-center gap-1.5 self-start sm:self-auto cursor-pointer">
+              <span>💾 บันทึกตาราง SKU</span>
+            </button>
+          </div>
+
+          <!-- Quick Add New SKU Model Row -->
+          <div class="bg-slate-50 p-3 rounded-xl border border-slate-200 grid grid-cols-1 sm:grid-cols-12 gap-2 text-xs">
+            <input type="text" id="new-sku-model" placeholder="รหัส SKU (เช่น bs4)" class="sm:col-span-2 px-2.5 py-1.5 rounded-lg border border-slate-300 font-mono font-bold">
+            <input type="text" id="new-sku-name" placeholder="ชื่อรุ่นสินค้า" class="sm:col-span-3 px-2.5 py-1.5 rounded-lg border border-slate-300">
+            <input type="number" id="new-sku-uph" placeholder="ค่าหุ้ม ฿" class="sm:col-span-2 px-2.5 py-1.5 rounded-lg border border-amber-300 bg-amber-50 font-bold">
+            <input type="number" id="new-sku-sew" placeholder="ค่าเย็บ ฿" class="sm:col-span-2 px-2.5 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 font-bold">
+            <input type="text" id="new-sku-aliases" placeholder="คำในใบงาน (คั่นด้วย ,)" class="sm:col-span-2 px-2.5 py-1.5 rounded-lg border border-slate-300">
+            <button type="button" id="btn-add-sku-row" class="sm:col-span-1 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg">+เพิ่ม</button>
+          </div>
+
+          <div class="overflow-x-auto border border-slate-200 rounded-xl max-h-[540px] overflow-y-auto">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead class="bg-slate-100 text-slate-700 sticky top-0 z-10 border-b border-slate-200">
+                <tr>
+                  <th class="py-2.5 px-3 w-20">SKU จริง</th>
+                  <th class="py-2.5 px-3 w-44">ชื่อรุ่นสินค้า</th>
+                  <th class="py-2.5 px-2 w-20 text-right bg-amber-50/70 text-amber-900">ค่าหุ้ม (฿)</th>
+                  <th class="py-2.5 px-2 w-20 text-right bg-emerald-50/70 text-emerald-900">ค่าเย็บ (฿)</th>
+                  <th class="py-2.5 px-3">คำที่เขียนในใบงาน (คั่นด้วยลูกน้ำ ,)</th>
+                  <th class="py-2.5 px-2 w-10 text-center">ลบ</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-sku-mapping" class="divide-y divide-slate-100">
+                <!-- Populated by app.js -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Right 5 Cols: Worker Mapping Table -->
+        <div class="lg:col-span-5 bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4 flex flex-col">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+            <div>
+              <h3 class="font-black text-base text-slate-900 flex items-center gap-2">
+                <span>👷 2. ตารางจับคู่รายชื่อช่าง (Worker Mapping)</span>
+                <span id="count-workers" class="px-2 py-0.5 text-[11px] font-black rounded-full bg-amber-100 text-amber-800">23 คน</span>
+              </h3>
+              <p class="text-xs text-slate-500 mt-0.5">
+                จับคู่ลายมือชื่อช่างในใบงาน (เช่น Blai Morn) เข้ากับชื่อจริงและแผนก (หุ้ม/เย็บ)
+              </p>
+            </div>
+            <button id="btn-save-worker-table" class="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-sm transition-colors flex items-center gap-1.5 self-start sm:self-auto cursor-pointer">
+              <span>💾 บันทึกรายชื่อช่าง</span>
+            </button>
+          </div>
+
+          <!-- Quick Add New Worker Row -->
+          <div class="bg-slate-50 p-3 rounded-xl border border-slate-200 grid grid-cols-1 sm:grid-cols-12 gap-2 text-xs">
+            <input type="text" id="new-worker-code" placeholder="รหัส (cv18)" class="sm:col-span-2 px-2 py-1.5 rounded-lg border border-slate-300 font-mono font-bold">
+            <input type="text" id="new-worker-name" placeholder="ชื่อช่างจริง" class="sm:col-span-3 px-2 py-1.5 rounded-lg border border-slate-300">
+            <select id="new-worker-dept" class="sm:col-span-2 px-2 py-1.5 rounded-lg border border-slate-300 font-bold bg-white">
+              <option value="หุ้ม">🔨 หุ้ม</option>
+              <option value="เย็บ">🧵 เย็บ</option>
+            </select>
+            <input type="text" id="new-worker-aliases" placeholder="ชื่อในใบงาน (คั่นด้วย ,)" class="sm:col-span-3 px-2 py-1.5 rounded-lg border border-slate-300">
+            <button type="button" id="btn-add-worker-row" class="sm:col-span-2 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg">+เพิ่ม</button>
+          </div>
+
+          <div class="overflow-x-auto border border-slate-200 rounded-xl max-h-[540px] overflow-y-auto">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead class="bg-slate-100 text-slate-700 sticky top-0 z-10 border-b border-slate-200">
+                <tr>
+                  <th class="py-2.5 px-2.5 w-16">รหัส</th>
+                  <th class="py-2.5 px-2.5 w-24">ชื่อในระบบ</th>
+                  <th class="py-2.5 px-2 w-20">แผนก</th>
+                  <th class="py-2.5 px-2.5">ชื่อที่เขียนในใบงาน (คั่นด้วย ,)</th>
+                  <th class="py-2.5 px-2 w-10 text-center">ลบ</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-worker-mapping" class="divide-y divide-slate-100">
+                <!-- Populated by app.js -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ======================================================================= -->
+    <!-- TAB 2: 📸 SCANNER (Rapid Burst Camera Mode & Multi-File Drag & Drop)    -->
+    <!-- ======================================================================= -->
+    <div id="tab-panel-scanner" class="tab-panel hidden space-y-6">
+
+      <!-- Top Banner: Rapid Workflow Options -->
+      <div class="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+          <div>
+            <span class="px-2.5 py-0.5 text-[10px] font-black uppercase rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+              High-Volume Job Sheet Scanner
+            </span>
+            <h2 class="text-lg sm:text-xl font-black text-slate-900 mt-1">
+              📸 โหมดถ่ายรูปใบงานต่อเนื่อง (Burst Camera) & ลากไฟล์รูปเข้าคิวอัตโนมัติ
+            </h2>
+            <p class="text-xs text-slate-500">
+              ออกแบบสำหรับใบงาน 100+ ใบต่อวัน: กดถ่ายรูปต่อเนื่องได้ทันทีโดยไม่ต้องรอทีละใบ ระบบจะส่งเข้าคิวให้ AI อ่านข้อมูลอยู่เบื้องหลัง
+            </p>
+          </div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <button id="btn-load-sample-sheet" class="px-4 py-2.5 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 cursor-pointer">
+              <span>🧪 ทดลองโหลดใบงานจริงตัวอย่าง (คุณ Blai Morn)</span>
+            </button>
+            <button id="btn-create-manual-sheet" class="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 cursor-pointer">
+              <span>✍️ สร้างใบงานคีย์มือด่วน</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-5">
+
+          <!-- Left 7 Cols: Live Camera Viewfinder (Burst Mode) -->
+          <div class="lg:col-span-7 bg-slate-900 rounded-2xl p-4 text-white flex flex-col justify-between space-y-4">
+            <div class="flex items-center justify-between gap-2 flex-wrap">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" id="camera-live-dot"></span>
+                <h3 class="font-bold text-sm">📷 กล้องถ่ายใบงานด่วน (กดถ่ายรัวๆ ได้เลย)</h3>
+              </div>
+              <div class="flex items-center gap-2">
+                <label class="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer">
+                  <input type="checkbox" id="chk-auto-ai-scan" checked class="rounded text-emerald-500">
+                  <span>ส่งให้ AI อ่านทันทีที่ถ่าย</span>
+                </label>
+                <button id="btn-start-camera" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl transition cursor-pointer">
+                  ▶️ เปิดกล้อง
+                </button>
+                <button id="btn-stop-camera" class="hidden px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl transition cursor-pointer">
+                  ⏹️ ปิดกล้อง
+                </button>
+              </div>
+            </div>
+
+            <!-- Video Viewport -->
+            <div class="relative rounded-2xl overflow-hidden bg-slate-950 aspect-[4/3] flex items-center justify-center border border-slate-800">
+              <video id="camera-video" autoplay playsinline muted class="hidden w-full h-full object-cover"></video>
+              <canvas id="camera-canvas" class="hidden"></canvas>
+              <div id="camera-flash-overlay" class="pointer-events-none absolute inset-0 bg-white opacity-0"></div>
+
+              <!-- Placeholder when camera is off -->
+              <div id="camera-placeholder" class="text-center p-6 space-y-3">
+                <div class="text-5xl">📱</div>
+                <div class="text-sm font-bold text-slate-200">กดปุ่ม "▶️ เปิดกล้อง" เพื่อเริ่มถ่ายรูปใบงานต่อเนื่อง</div>
+                <p class="text-xs text-slate-400 max-w-md mx-auto">
+                  หรือหากเปิดบนมือถือ สามารถกดปุ่ม <strong>"📸 ถ่ายรูปจากกล้องมือถือโดยตรง"</strong> ด้านล่างเพื่อใช้กล้องความละเอียดสูงของมือถือได้ทันที
+                </p>
+                <div class="pt-2 flex items-center justify-center gap-2 flex-wrap">
+                  <button id="btn-start-camera-center" class="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-lg transition cursor-pointer">
+                    ▶️ เปิดกล้องบนหน้าเว็บ (ถ่ายรัวต่อเนื่อง)
+                  </button>
+                  <label for="input-native-camera" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg transition cursor-pointer">
+                    📸 เปิดแอปกล้องมือถือ (ชัดสูง)
+                  </label>
+                  <input type="file" id="input-native-camera" accept="image/*" capture="environment" class="hidden">
+                </div>
+              </div>
+            </div>
+
+            <!-- Shutter Button Bar -->
+            <div class="flex items-center justify-between gap-3">
+              <div class="text-xs text-slate-400">
+                💡 เคล็ดลับ: วางใบงานให้เห็นชื่อช่าง วันที่ และตารางชัดเจน แล้วกดปุ่มชัตเตอร์ (หรือกดปุ่ม Spacebar)
+              </div>
+              <button id="btn-shutter-capture" disabled class="px-6 py-3 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-black text-sm rounded-2xl shadow-lg transition flex items-center gap-2 shrink-0 cursor-pointer">
+                <span class="text-lg">📸</span>
+                <span>กดถ่ายใบงาน (Capture)</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Right 5 Cols: Multi-File Drag & Drop + Background Processing Queue -->
+          <div class="lg:col-span-5 flex flex-col justify-between space-y-4">
+
+            <!-- Drag & Drop Zone -->
+            <div id="dropzone-sheets" class="border-2 border-dashed border-indigo-300 hover:border-indigo-500 bg-indigo-50/40 hover:bg-indigo-50/80 rounded-2xl p-6 text-center transition-all cursor-pointer flex flex-col items-center justify-center">
+              <div class="text-4xl mb-2">📂</div>
+              <h3 class="text-sm font-black text-indigo-950">ลากไฟล์รูปใบงานทั้งหมดมาวางที่นี่ (Drag & Drop)</h3>
+              <p class="text-xs text-slate-500 mt-1">
+                รองรับการเลือกทีละ 10–100 รูปพร้อมกัน (.jpg, .png, .webp)
+              </p>
+              <label for="file-batch-images" class="mt-3 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow transition cursor-pointer">
+                เลือกไฟล์รูปใบงานจากเครื่อง
+              </label>
+              <input type="file" id="file-batch-images" accept="image/*" multiple class="hidden">
+            </div>
+
+            <!-- Processing Queue Box -->
+            <div class="flex-1 bg-slate-50 rounded-2xl p-4 border border-slate-200 flex flex-col justify-between space-y-3">
+              <div class="flex items-center justify-between border-b border-slate-200 pb-2.5">
+                <div>
+                  <h4 class="font-black text-xs sm:text-sm text-slate-900">⏳ คิวประมวลผลใบงาน (AI Processing Queue)</h4>
+                  <p class="text-[11px] text-slate-500">รายการรูปใบงานที่ถ่ายหรืออัปโหลดเข้ามา</p>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <button id="btn-process-all-queue" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow-sm transition cursor-pointer">
+                    🤖 สั่ง AI อ่านทั้งหมดในคิว
+                  </button>
+                  <button id="btn-clear-finished-queue" class="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-600 border border-slate-300 font-bold text-[11px] rounded-lg transition cursor-pointer">
+                    ล้างคิวที่เสร็จแล้ว
+                  </button>
+                </div>
+              </div>
+
+              <div id="queue-list-container" class="space-y-2 max-h-64 overflow-y-auto pr-1 text-xs">
+                <div class="text-center py-8 text-slate-400">
+                  ยังไม่มีใบงานในคิว กดถ่ายรูปหรือลากไฟล์รูปมาวางได้เลยครับ
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================================================================= -->
+    <!-- TAB 3: 🔍 SIDE-BY-SIDE REVIEW & VERIFY                                  -->
+    <!-- ======================================================================= -->
+    <div id="tab-panel-review" class="tab-panel hidden space-y-5">
+
+      <!-- Sheet Selector Bar -->
+      <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-xs font-black text-slate-700">📄 เลือกใบงานที่ต้องการตรวจสอบ:</span>
+          <select id="select-review-sheet" class="px-3 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-slate-50 min-w-[260px] outline-none focus:ring-2 focus:ring-indigo-500">
+            <option value="">-- ยังไม่มีใบงาน --</option>
+          </select>
+          <button id="btn-prev-sheet" class="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold">◀ ก่อนหน้า</button>
+          <button id="btn-next-sheet" class="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold">ถัดไป ▶</button>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="btn-rescan-current-sheet" class="px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold cursor-pointer">
+            🔄 ให้ AI อ่านใบนี้ใหม่
+          </button>
+          <button id="btn-delete-current-sheet" class="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold cursor-pointer">
+            🗑️ ลบใบงานนี้
+          </button>
+        </div>
+      </div>
+
+      <!-- Empty State when no sheet is loaded -->
+      <div id="review-empty-state" class="bg-white rounded-3xl p-12 text-center border border-slate-200 space-y-3">
+        <div class="text-5xl">📑</div>
+        <h3 class="text-lg font-black text-slate-800">ยังไม่มีใบงานที่เลือกตรวจสอบ</h3>
+        <p class="text-xs text-slate-500 max-w-md mx-auto">
+          คุณสามารถไปที่แท็บ <strong>"📸 2. ถ่ายรูปใบงานด่วน"</strong> เพื่อถ่ายรูปใบงาน หรือกดปุ่มด้านล่างเพื่อโหลดใบงานตัวอย่างของคุณ <strong>Blai Morn (วันที่ 15.6.69)</strong> มาดูการทำงานได้เลยครับ
+        </p>
+        <button id="btn-review-load-sample" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow transition cursor-pointer">
+          🧪 โหลดใบงานตัวอย่างจริง (คุณ Blai Morn)
+        </button>
+      </div>
+
+      <!-- Side-by-Side Workspace -->
+      <div id="review-workspace" class="hidden grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- Left 5 Cols: Original Job Sheet Photo with Zoom / Rotate Controls -->
+        <div class="lg:col-span-5 bg-slate-900 rounded-2xl p-4 text-white flex flex-col justify-between space-y-3 h-[680px]">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-2.5">
+            <span class="text-xs font-bold text-slate-300">🖼️ รูปใบงานต้นฉบับ (ซูม/หมุนดูได้)</span>
+            <div class="flex items-center gap-1.5">
+              <button type="button" id="btn-zoom-out" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-xs font-bold">➖</button>
+              <span id="label-zoom-level" class="text-[11px] font-mono px-1.5">100%</span>
+              <button type="button" id="btn-zoom-in" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-xs font-bold">➕</button>
+              <button type="button" id="btn-rotate-img" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-xs font-bold">🔄 หมุน</button>
+              <button type="button" id="btn-reset-img" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-xs font-bold">รีเซ็ต</button>
+            </div>
+          </div>
+
+          <div class="image-viewer-stage flex-1 rounded-xl flex items-center justify-center overflow-auto">
+            <img id="review-sheet-image" src="" alt="Job Sheet" class="max-w-full max-h-full object-contain">
+          </div>
+
+          <div class="text-[11px] text-slate-400 text-center">
+            เปรียบเทียบตัวเลขในรูปฝั่งซ้ายกับตารางฝั่งขวา หากถูกต้องครบถ้วนกด "💾 บันทึก & ยืนยันใบงาน"
+          </div>
+        </div>
+
+        <!-- Right 7 Cols: Parsed Job Sheet Header, Late Note Alert & 20-Row Table -->
+        <div class="lg:col-span-7 bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex flex-col justify-between space-y-4">
+          <div class="space-y-4">
+            <!-- Header Info: Worker, Date, Payroll Period -->
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200 text-xs">
+              <!-- Worker Match -->
+              <div>
+                <label class="block font-bold text-slate-600 mb-1">
+                  👷 ชื่อช่างในใบงาน: <span id="review-raw-worker" class="text-indigo-600 font-mono"></span>
+                </label>
+                <select id="review-select-worker" class="w-full px-2.5 py-2 rounded-xl border border-slate-300 font-bold bg-white text-slate-900">
+                  <!-- Populated via JS -->
+                </select>
+                <div class="mt-1 flex items-center justify-between">
+                  <span id="review-worker-dept-badge" class="px-2 py-0.5 rounded text-[10px] font-black bg-amber-100 text-amber-900">แผนกหุ้ม</span>
+                  <button type="button" id="btn-learn-worker-alias" class="text-[11px] font-bold text-indigo-600 hover:underline">
+                    📌 จำลายมือชื่อช่างนี้
+                  </button>
+                </div>
+              </div>
+
+              <!-- Sheet Date -->
+              <div>
+                <label class="block font-bold text-slate-600 mb-1">
+                  📅 วันที่ในใบงาน (<span id="review-raw-date" class="font-mono text-slate-800"></span>):
+                </label>
+                <input type="date" id="review-input-date" class="w-full px-2.5 py-2 rounded-xl border border-slate-300 font-bold bg-white">
+                <span class="text-[10px] text-slate-400 block mt-1">ระบบแปลง พ.ศ. 69 ➔ ค.ศ. 2026 อัตโนมัติ</span>
+              </div>
+
+              <!-- Payroll Period Selector (1-15 vs 16-end) -->
+              <div>
+                <label class="block font-bold text-emerald-800 mb-1">
+                  🗓️ งวดจ่ายเงิน (ตัดวิก 15 วัน):
+                </label>
+                <select id="review-select-period" class="w-full px-2.5 py-2 rounded-xl border-2 border-emerald-400 font-black bg-emerald-50/60 text-emerald-950">
+                  <!-- Populated via JS -->
+                </select>
+                <span id="review-paydate-hint" class="text-[10px] font-bold text-emerald-700 block mt-1"></span>
+              </div>
+            </div>
+
+            <!-- Special Note / Late Submission Alert Banner -->
+            <div id="review-note-banner" class="p-3.5 rounded-2xl border border-amber-300 bg-amber-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+              <div class="space-y-1 flex-1">
+                <div class="font-black text-amber-950 flex items-center gap-1.5">
+                  <span>📝 หมายเหตุท้ายใบงาน (AI ตรวจพบ):</span>
+                </div>
+                <input type="text" id="review-input-note" placeholder="หมายเหตุพิเศษ เช่น เอาไปรวมยอด 16-30 มิ.ย. 69 เนื่องจากส่งใบงานล่าช้า..." class="w-full px-2.5 py-1.5 rounded-lg border border-amber-300 bg-white text-amber-950 font-bold text-xs">
+              </div>
+              <button type="button" id="btn-shift-next-period" class="px-3 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl shadow-sm shrink-0 cursor-pointer">
+                ⏩ โยกไปงวดถัดไปตามหมายเหตุ
+              </button>
+            </div>
+
+            <!-- Items Table -->
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <h4 class="font-black text-xs sm:text-sm text-slate-800">รายการผลิตในใบงาน (คลิกแก้ไขหรือกด 📌 เพื่อจำคำย่อใหม่เข้า SKU จริง)</h4>
+                <button type="button" id="btn-add-review-item" class="px-3 py-1 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-lg cursor-pointer">
+                  + เพิ่มแถวรายการ
+                </button>
+              </div>
+              <div class="overflow-x-auto border border-slate-200 rounded-xl max-h-[360px] overflow-y-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                  <thead class="bg-slate-100 text-slate-700 sticky top-0 z-10 border-b border-slate-200">
+                    <tr>
+                      <th class="py-2 px-2 w-8 text-center">#</th>
+                      <th class="py-2 px-2">คำในใบงาน (รุ่น)</th>
+                      <th class="py-2 px-2 w-44">จับคู่ SKU โรงงาน</th>
+                      <th class="py-2 px-2 w-20">สี/รหัสผ้า</th>
+                      <th class="py-2 px-2 w-14 text-center">จำนวน</th>
+                      <th class="py-2 px-2 w-24">พนง.แจกงาน</th>
+                      <th class="py-2 px-2 w-24">รับเข้าสต็อก</th>
+                      <th class="py-2 px-2 w-20 text-right">ค่าแรง/ชิ้น</th>
+                      <th class="py-2 px-2 w-20 text-right">รวม (฿)</th>
+                      <th class="py-2 px-1 w-8 text-center">ลบ</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbody-review-items" class="divide-y divide-slate-100">
+                    <!-- Populated via JS -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Footer Totals & Confirm Button -->
+          <div class="border-t border-slate-200 pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div class="flex items-center gap-4 text-xs">
+              <div>รวมจำนวน: <strong id="review-total-units" class="text-base font-black text-indigo-700">0</strong> ชิ้น</div>
+              <div>รวมค่าแรงใบนี้: <strong id="review-total-wage" class="text-lg font-black text-emerald-700">0.00</strong> บาท</div>
+            </div>
+            <button type="button" id="btn-save-verified-sheet" class="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs sm:text-sm rounded-xl shadow-md transition flex items-center justify-center gap-2 cursor-pointer">
+              <span>✅ บันทึก & ยืนยันยอดใบงานนี้เข้าสรุปงวดจ่ายเงิน</span>
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ======================================================================= -->
+    <!-- TAB 4: 💰 15-DAY PAYROLL SUMMARY & WORKER SLIPS                         -->
+    <!-- ======================================================================= -->
+    <div id="tab-panel-payroll" class="tab-panel hidden space-y-6">
+
+      <!-- Top Payroll Dashboard Card -->
+      <div class="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-6 shadow-xl border border-indigo-800/40 space-y-5">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/10 pb-4">
+          <div>
+            <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+              15-Day Bi-Monthly Factory Payroll
+            </span>
+            <h2 class="text-xl font-black mt-1">
+              💰 สรุปยอดจ่ายค่าแรงช่างตามงวด 15 วัน (1–15 จ่ายวันที่ 20 | 16–สิ้นเดือน จ่ายวันที่ 5)
+            </h2>
+            <p class="text-xs text-slate-300 mt-0.5">
+              รวมยอดจากใบงานที่สแกนและยืนยันแล้ว แยกตามรายชื่อช่าง แผนกหุ้ม/เย็บ พร้อมออกสลิปและ Export Excel
+            </p>
+          </div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <button id="btn-export-payroll-excel" class="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-lg transition flex items-center gap-1.5 cursor-pointer">
+              <span>📥 ดาวน์โหลด Excel สรุปจ่ายเงินงวดนี้ (.xlsx)</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Filters: Period, Dept, Worker -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <div>
+            <label class="block text-slate-300 font-bold mb-1">🗓️ เลือกงวดจ่ายเงิน (Payroll Period):</label>
+            <select id="filter-payroll-period" class="w-full px-3 py-2 rounded-xl bg-white text-slate-900 font-black outline-none">
+              <option value="ALL">ทุกงวดรวมกัน (All Periods)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-slate-300 font-bold mb-1">👷 แผนกช่าง:</label>
+            <select id="filter-payroll-dept" class="w-full px-3 py-2 rounded-xl bg-white text-slate-900 font-bold outline-none">
+              <option value="ALL">ทุกแผนก (ช่างหุ้ม + ช่างเย็บ)</option>
+              <option value="หุ้ม">🔨 เฉพาะแผนกช่างหุ้ม</option>
+              <option value="เย็บ">🧵 เฉพาะแผนกช่างเย็บ</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-slate-300 font-bold mb-1">🔍 ค้นหาชื่อช่าง:</label>
+            <input type="text" id="filter-payroll-search" placeholder="พิมพ์ชื่อช่าง หรือ รหัส เช่น cv3, บายมอญ..." class="w-full px-3 py-2 rounded-xl bg-white text-slate-900 font-bold outline-none">
+          </div>
+        </div>
+
+        <!-- Summary KPI Cards -->
+        <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <div class="bg-white/5 border border-white/10 p-3.5 rounded-2xl">
+            <span class="text-[11px] text-slate-400 block">จำนวนใบงานในงวดนี้</span>
+            <span id="kpi-total-sheets" class="text-2xl font-black text-white mt-1 block">0</span>
+            <span class="text-[10px] text-slate-400">ใบงาน</span>
+          </div>
+          <div class="bg-white/5 border border-white/10 p-3.5 rounded-2xl">
+            <span class="text-[11px] text-slate-400 block">จำนวนชิ้นงานรวม</span>
+            <span id="kpi-total-units" class="text-2xl font-black text-cyan-300 mt-1 block">0</span>
+            <span class="text-[10px] text-slate-400">ชิ้น</span>
+          </div>
+          <div class="bg-white/5 border border-white/10 p-3.5 rounded-2xl">
+            <span class="text-[11px] text-amber-300 block">🔨 ยอดจ่ายช่างหุ้ม</span>
+            <span id="kpi-uph-wage" class="text-2xl font-black text-amber-300 mt-1 block">0.00</span>
+            <span class="text-[10px] text-slate-400">บาท</span>
+          </div>
+          <div class="bg-white/5 border border-white/10 p-3.5 rounded-2xl">
+            <span class="text-[11px] text-emerald-300 block">🧵 ยอดจ่ายช่างเย็บ</span>
+            <span id="kpi-sew-wage" class="text-2xl font-black text-emerald-300 mt-1 block">0.00</span>
+            <span class="text-[10px] text-slate-400">บาท</span>
+          </div>
+          <div class="col-span-2 sm:col-span-1 bg-emerald-500/20 border border-emerald-400/40 p-3.5 rounded-2xl">
+            <span class="text-[11px] text-emerald-200 font-bold block">💵 ยอดโอนจ่ายสุทธิรวม</span>
+            <span id="kpi-grand-wage" class="text-2xl font-black text-emerald-300 mt-1 block">0.00</span>
+            <span id="kpi-paydate-badge" class="text-[10px] text-emerald-200 font-bold">บาท</span>
+          </div>
+        </div>
+
+        <!-- Worker Payroll Table -->
+        <div class="overflow-x-auto bg-black/25 rounded-2xl border border-white/10">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr class="bg-white/10 text-slate-200 font-bold border-b border-white/10">
+                <th class="py-3 px-4">รหัส / ชื่อช่าง</th>
+                <th class="py-3 px-3 text-center">แผนก</th>
+                <th class="py-3 px-3 text-center">จำนวนใบงาน</th>
+                <th class="py-3 px-3 text-center">จำนวนชิ้นรวม</th>
+                <th class="py-3 px-4">สรุปแยกตามรุ่น SKU</th>
+                <th class="py-3 px-4 text-right">ยอดค่าแรงสุทธิ (บาท)</th>
+                <th class="py-3 px-4 text-center">สลิปใบงาน</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-payroll-workers" class="divide-y divide-white/10">
+              <!-- Populated via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- All Sheets List in Selected Period -->
+      <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3">
+        <h3 class="font-black text-base text-slate-900">📋 รายการใบงานทั้งหมดในงวดที่เลือก (คลิกเพื่อเปิดดูรูป/แก้ไข)</h3>
+        <div class="overflow-x-auto border border-slate-200 rounded-xl">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead class="bg-slate-100 text-slate-700 border-b border-slate-200">
+              <tr>
+                <th class="py-2.5 px-3">รหัสใบงาน</th>
+                <th class="py-2.5 px-3">วันที่ในใบงาน</th>
+                <th class="py-2.5 px-3">งวดจ่ายเงิน</th>
+                <th class="py-2.5 px-3">ชื่อช่าง (ลายมือ ➔ ชื่อจริง)</th>
+                <th class="py-2.5 px-3 text-center">จำนวนชิ้น</th>
+                <th class="py-2.5 px-3 text-right">ยอดเงินรวม (฿)</th>
+                <th class="py-2.5 px-3">หมายเหตุ</th>
+                <th class="py-2.5 px-3 text-center">จัดการ</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-payroll-sheets" class="divide-y divide-slate-100">
+              <!-- Populated via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: WORKER PAYSLIP PREVIEW & PRINT                                     -->
+  <!-- ========================================================================= -->
+  <div id="modal-payslip" class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90vh] flex flex-col">
+      <div class="flex items-center justify-between border-b border-slate-200 pb-3 no-print">
+        <h3 class="font-black text-base text-slate-900">🧾 ใบสรุปค่าแรงเหมาช่าง (Worker Payroll Slip)</h3>
+        <div class="flex items-center gap-2">
+          <button type="button" id="btn-print-slip-now" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow cursor-pointer">
+            🖨️ พิมพ์สลิปค่าแรง
+          </button>
+          <button type="button" id="btn-close-payslip" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer">
+            ✕ ปิด
+          </button>
+        </div>
+      </div>
+      <div id="print-slip-Area" class="overflow-y-auto space-y-4 text-xs p-2">
+        <!-- Populated dynamically via JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="payroll-db.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
