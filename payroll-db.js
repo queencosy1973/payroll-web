@@ -1241,6 +1241,158 @@ ${workerContext}
     saveSheets(all);
   }
 
+  // Generate 3 months (6 periods) of realistic demo data for testing Executive Charts
+  function seedDemoMultiMonthData() {
+    const existing = getSavedSheets().filter(s => !s.isDemo);
+    const demoWorkers = [
+      { code: 'cv1', name: 'นาย', dept: 'หุ้ม', raw: 'นาย' },
+      { code: 'cv2', name: 'เอ', dept: 'หุ้ม', raw: 'Ae' },
+      { code: 'cv3', name: 'บายมอญ', dept: 'หุ้ม', raw: 'Blai Morn' },
+      { code: 'cv4', name: 'พู', dept: 'หุ้ม', raw: 'Phu' },
+      { code: 'cv5', name: 'หลวย', dept: 'หุ้ม', raw: 'หลวย' },
+      { code: 'sew1', name: 'อ่อน', dept: 'เย็บ', raw: 'อ่อน' },
+      { code: 'sew2', name: 'เนยู', dept: 'เย็บ', raw: 'Neyu' },
+      { code: 'sew3', name: 'บี', dept: 'เย็บ', raw: 'Bee' }
+    ];
+    const demoSkus = [
+      { raw: '3 <> 11 (LN3)', sku: 'ln3', uph: 140, sew: 30 },
+      { raw: '311 Lit (BS3)', sku: 'bs3', uph: 120, sew: 35 },
+      { raw: 'แอลมินิมอล (MN)', sku: 'mn', uph: 170, sew: 50 },
+      { raw: 'เบดปรับนอน (RC)', sku: 'rc', uph: 130, sew: 20 },
+      { raw: '3 <> 2 lit (BS2)', sku: 'bs2', uph: 90, sew: 20 },
+      { raw: 'st [] (CU)', sku: 'cu', uph: 20, sew: 4 }
+    ];
+
+    const datesToSeed = [
+      // ส.ค. 69 (2026-08)
+      { date: '2026-08-05', period: '2026-08-P1', mult: 1.0 },
+      { date: '2026-08-12', period: '2026-08-P1', mult: 1.2 },
+      { date: '2026-08-15', period: '2026-08-P1', mult: 1.4, late: false },
+      { date: '2026-08-20', period: '2026-08-P2', mult: 1.1 },
+      { date: '2026-08-28', period: '2026-08-P2', mult: 1.3 },
+      // ก.ย. 69 (2026-09)
+      { date: '2026-09-04', period: '2026-09-P1', mult: 1.1 },
+      { date: '2026-09-11', period: '2026-09-P1', mult: 1.3 },
+      { date: '2026-09-15', period: '2026-09-P2', mult: 1.2, late: true, note: 'เอาไปรวมยอด 16-30 ก.ย. 69 เนื่องจากส่งใบงานล่าช้า' },
+      { date: '2026-09-22', period: '2026-09-P2', mult: 1.4 },
+      { date: '2026-09-29', period: '2026-09-P2', mult: 1.5 },
+      // ต.ค. 69 (2026-10)
+      { date: '2026-10-05', period: '2026-10-P1', mult: 1.3 },
+      { date: '2026-10-12', period: '2026-10-P1', mult: 1.5 },
+      { date: '2026-10-15', period: '2026-10-P1', mult: 1.6 },
+      { date: '2026-10-18', period: '2026-10-P2', mult: 1.4 },
+      { date: '2026-10-21', period: '2026-10-P2', mult: 1.5 }
+    ];
+
+    const generated = [];
+    let seq = 1;
+
+    datesToSeed.forEach((dObj, dIdx) => {
+      demoWorkers.forEach((w, wIdx) => {
+        // Pick 3-5 items per sheet
+        const items = [];
+        let totalUnits = 0;
+        let totalWage = 0;
+        const itemCount = 3 + ((dIdx + wIdx) % 3);
+
+        for (let i = 0; i < itemCount; i++) {
+          const s = demoSkus[(dIdx + wIdx + i) % demoSkus.length];
+          const qty = Math.max(1, Math.round((1 + ((i + wIdx) % 2)) * dObj.mult));
+          const rate = w.dept === 'เย็บ' ? s.sew : s.uph;
+          const lineTotal = qty * rate;
+          totalUnits += qty;
+          totalWage += lineTotal;
+          items.push({
+            rowNo: i + 1,
+            rawModel: s.raw,
+            matchedSku: s.sku,
+            skuName: s.raw,
+            isMatched: true,
+            color: ['337-22', '337-29', 'Br', 'Mc', 'CV'][(i + dIdx) % 5],
+            qty,
+            channel: i % 2 === 0 ? 'Shopee' : 'TikTok',
+            foamBy: '',
+            stockReceiver: 'su 16.30',
+            unitRate: rate,
+            lineTotal
+          });
+        }
+
+        generated.push({
+          id: `SH-DEMO-${String(seq++).padStart(3, '0')}`,
+          isDemo: true,
+          createdAt: new Date().toISOString(),
+          imageDataUrl: 'sample_jobsheet.jpg',
+          rawWorkerName: w.raw,
+          workerCode: w.code,
+          workerName: w.name,
+          workerDept: w.dept,
+          isWorkerMatched: true,
+          rawDate: dObj.date,
+          sheetDate: dObj.date,
+          specialNote: dObj.late && wIdx === 2 ? dObj.note : '',
+          isLateCarryOver: Boolean(dObj.late && wIdx === 2),
+          payrollPeriodKey: dObj.period,
+          status: 'VERIFIED',
+          totalUnits,
+          totalWage,
+          items
+        });
+      });
+    });
+
+    const combined = [...existing, ...generated];
+    saveSheets(combined);
+    return generated.length;
+  }
+
+  function clearDemoSheets() {
+    const realOnly = getSavedSheets().filter(s => !s.isDemo);
+    saveSheets(realOnly);
+    return realOnly.length;
+  }
+
+  function exportHistoryBackupJson() {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      skuMappings: getSkuMappings(),
+      workerMappings: getWorkerMappings(),
+      sheets: getSavedSheets().map(s => ({ ...s, imageDataUrl: s.imageDataUrl && s.imageDataUrl.length > 500 ? '' : s.imageDataUrl }))
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `QueenCosy_Payroll_Backup_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importHistoryBackupJson(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          if (Array.isArray(data.skuMappings) && data.skuMappings.length > 0) {
+            saveSkuMappings(data.skuMappings);
+          }
+          if (Array.isArray(data.workerMappings) && data.workerMappings.length > 0) {
+            saveWorkerMappings(data.workerMappings);
+          }
+          if (Array.isArray(data.sheets)) {
+            saveSheets(data.sheets);
+          }
+          resolve({ sheetsCount: (data.sheets || []).length });
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.onerror = () => reject(new Error('ไม่สามารถอ่านไฟล์สำรองข้อมูลได้'));
+      reader.readAsText(file);
+    });
+  }
+
   initSupabase();
 
   return {
@@ -1268,7 +1420,11 @@ ${workerContext}
     getSavedSheets,
     saveSheets,
     upsertSheet,
-    deleteSheet
+    deleteSheet,
+    seedDemoMultiMonthData,
+    clearDemoSheets,
+    exportHistoryBackupJson,
+    importHistoryBackupJson
   };
 })();
 

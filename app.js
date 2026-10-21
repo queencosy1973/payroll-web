@@ -11,6 +11,12 @@
   let imgZoom = 1;
   let imgRotation = 0;
 
+  // Chart.js Instances for Tab 5 Executive Dashboard
+  let chartMonthlyTrend = null;
+  let chartSkuMix = null;
+  let chartWorkerRank = null;
+  let chartDailyRhythm = null;
+
   // ===========================================================================
   // INITIALIZATION
   // ===========================================================================
@@ -21,6 +27,7 @@
     initScannerAndCameraUI();
     initReviewWorkspaceUI();
     initPayrollSummaryUI();
+    initExecutiveDashboardUI();
 
     refreshAllViews();
   });
@@ -31,6 +38,7 @@
     renderQueueList();
     renderReviewSelectorAndWorkspace();
     renderPayrollDashboard();
+    renderExecutiveDashboard();
     updateHeaderBadges();
   }
 
@@ -90,6 +98,8 @@
       renderReviewSelectorAndWorkspace();
     } else if (tabName === 'payroll') {
       renderPayrollDashboard();
+    } else if (tabName === 'dashboard') {
+      renderExecutiveDashboard();
     }
   }
 
@@ -1667,6 +1677,601 @@
 
     const periodTag = data.selectedPeriod === 'ALL' ? 'ALL' : data.selectedPeriod;
     XLSX.writeFile(wb, `QueenCosy_Payroll_${periodTag}.xlsx`);
+  }
+
+  // ===========================================================================
+  // TAB 5: EXECUTIVE MONTHLY DASHBOARD & MULTI-MONTH COMPARISON CHARTS
+  // ===========================================================================
+  const THAI_MONTHS_SHORT = ['', 'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+  const THAI_MONTHS_FULL = ['', 'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+
+  function formatMonthKeyLabel(ymKey, full = false) {
+    if (!ymKey || ymKey === 'ALL') return 'ทุกเดือนรวมกัน';
+    const [yStr, mStr] = ymKey.split('-');
+    const yearAD = parseInt(yStr, 10) || 2026;
+    const monthNum = parseInt(mStr, 10) || 1;
+    const yearBE = yearAD + 543;
+    return full
+      ? `${THAI_MONTHS_FULL[monthNum]} ${yearBE}`
+      : `${THAI_MONTHS_SHORT[monthNum]} ${String(yearBE).slice(-2)}`;
+  }
+
+  function getMonthKeyFromSheet(sheet) {
+    if (sheet.payrollPeriodKey && /^\d{4}-\d{2}/.test(sheet.payrollPeriodKey)) {
+      return sheet.payrollPeriodKey.slice(0, 7);
+    }
+    if (sheet.sheetDate && /^\d{4}-\d{2}/.test(sheet.sheetDate)) {
+      return sheet.sheetDate.slice(0, 7);
+    }
+    return '2026-06';
+  }
+
+  function initExecutiveDashboardUI() {
+    const selectMonth = document.getElementById('dash-select-month');
+    const selectTrendMode = document.getElementById('dash-select-trend-mode');
+    const selectDept = document.getElementById('dash-select-dept');
+    const btnSeedDemo = document.getElementById('btn-seed-demo-months');
+    const btnClearDemo = document.getElementById('btn-clear-demo-months');
+    const btnBackupJson = document.getElementById('btn-backup-history-json');
+    const fileRestoreJson = document.getElementById('file-restore-history-json');
+
+    [selectMonth, selectTrendMode, selectDept].forEach(el => {
+      if (el) el.addEventListener('change', renderExecutiveDashboard);
+    });
+
+    if (btnSeedDemo) {
+      btnSeedDemo.addEventListener('click', () => {
+        const added = PayrollDB.seedDemoMultiMonthData();
+        refreshAllViews();
+        switchTab('dashboard');
+        alert(`🧪 สร้างข้อมูลจำลองเปรียบเทียบ 3 เดือน (พ.ค., มิ.ย., ก.ค. 2569) จำนวน ${added} ใบงานเรียบร้อยแล้ว!\n\nคุณสามารถดูกราฟเปรียบเทียบรายเดือน/รายวิก, สัดส่วน SKU และอันดับช่างได้ทันที และกดปุ่ม "🗑️ ล้างข้อมูลจำลอง" ออกเมื่อไหร่ก็ได้ครับ`);
+      });
+    }
+
+    if (btnClearDemo) {
+      btnClearDemo.addEventListener('click', () => {
+        const remain = PayrollDB.clearDemoSheets();
+        refreshAllViews();
+        alert(`🗑️ ล้างข้อมูลจำลองออกเรียบร้อยแล้ว (เหลือใบงานจริงในระบบ ${remain.length} ใบ)`);
+      });
+    }
+
+    if (btnBackupJson) {
+      btnBackupJson.addEventListener('click', () => {
+        PayrollDB.exportHistoryBackupJson();
+      });
+    }
+
+    if (fileRestoreJson) {
+      fileRestoreJson.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+          const count = await PayrollDB.importHistoryBackupJson(file);
+          refreshAllViews();
+          alert(`📂 กู้คืนข้อมูลประวัติใบงานทั้งหมด (${count} ใบงาน) พร้อมตารางจับคู่ SKU/ชื่อช่าง เรียบร้อยแล้ว!`);
+        } catch (err) {
+          alert(`❌ ไม่สามารถกู้คืนไฟล์สำรองได้: ${err.message}`);
+        } finally {
+          fileRestoreJson.value = '';
+        }
+      });
+    }
+  }
+
+  function renderExecutiveDashboard() {
+    const allSheets = PayrollDB.getSavedSheets();
+    const selectMonth = document.getElementById('dash-select-month');
+    const selectTrendMode = document.getElementById('dash-select-trend-mode');
+    const selectDept = document.getElementById('dash-select-dept');
+    if (!selectMonth) return;
+
+    const currentFocusMonth = selectMonth.value || 'ALL';
+    const trendMode = selectTrendMode ? selectTrendMode.value : 'MONTHLY';
+    const deptFilter = selectDept ? selectDept.value : 'ALL';
+
+    // Populate unique months dropdown
+    const allMonthKeys = Array.from(new Set(allSheets.map(getMonthKeyFromSheet))).sort().reverse();
+    selectMonth.innerHTML = [
+      `<option value="ALL">ทุกเดือนรวมกัน (${allSheets.length} ใบงาน)</option>`,
+      ...allMonthKeys.map(ym => `<option value="${ym}" ${ym === currentFocusMonth ? 'selected' : ''}>📅 เดือน${formatMonthKeyLabel(ym, true)}</option>`)
+    ].join('');
+
+    const activeFocusMonth = allMonthKeys.includes(currentFocusMonth) ? currentFocusMonth : 'ALL';
+
+    // Filter sheets by dept for overall trend & focus month
+    const deptFilteredSheets = allSheets.filter(s => {
+      if (deptFilter !== 'ALL' && s.workerDept !== deptFilter) return false;
+      return true;
+    });
+
+    // Aggregate by Month (YYYY-MM) ascending for historical comparison
+    const monthlyMap = new Map();
+    deptFilteredSheets.forEach(s => {
+      const ym = getMonthKeyFromSheet(s);
+      if (!monthlyMap.has(ym)) {
+        monthlyMap.set(ym, {
+          ym,
+          sheetCount: 0,
+          totalUnits: 0,
+          p1Wage: 0,
+          p2Wage: 0,
+          uphWage: 0,
+          sewWage: 0,
+          totalWage: 0,
+          lateCount: 0
+        });
+      }
+      const m = monthlyMap.get(ym);
+      const wage = s.totalWage || 0;
+      const units = s.totalUnits || 0;
+      m.sheetCount += 1;
+      m.totalUnits += units;
+      m.totalWage += wage;
+      if (String(s.payrollPeriodKey || '').endsWith('-P1')) {
+        m.p1Wage += wage;
+      } else {
+        m.p2Wage += wage;
+      }
+      if (s.workerDept === 'เย็บ') {
+        m.sewWage += wage;
+      } else {
+        m.uphWage += wage;
+      }
+      if (s.isLateCarryOver || (s.specialNote && /ล่าช้า|รวมยอด/.test(s.specialNote))) {
+        m.lateCount += 1;
+      }
+    });
+
+    const sortedMonths = Array.from(monthlyMap.values()).sort((a, b) => a.ym.localeCompare(b.ym));
+
+    // Focus sheets (filtered by activeFocusMonth + deptFilter)
+    const focusSheets = deptFilteredSheets.filter(s => {
+      if (activeFocusMonth !== 'ALL' && getMonthKeyFromSheet(s) !== activeFocusMonth) return false;
+      return true;
+    });
+
+    // Compute 6 KPI Cards for Focus Selection
+    let focusTotalWage = 0;
+    let focusP1Wage = 0;
+    let focusP2Wage = 0;
+    let focusUnits = 0;
+    let focusUphWage = 0;
+    let focusSewWage = 0;
+    let focusLateCount = 0;
+    const workerAgg = new Map();
+    const skuAgg = new Map();
+    const dailyUnits = new Array(31).fill(0);
+    const dailyWages = new Array(31).fill(0);
+
+    const skuMaster = PayrollDB.getSkuMappings();
+
+    focusSheets.forEach(s => {
+      const wage = s.totalWage || 0;
+      const units = s.totalUnits || 0;
+      focusTotalWage += wage;
+      focusUnits += units;
+
+      if (String(s.payrollPeriodKey || '').endsWith('-P1')) {
+        focusP1Wage += wage;
+      } else {
+        focusP2Wage += wage;
+      }
+
+      if (s.workerDept === 'เย็บ') {
+        focusSewWage += wage;
+      } else {
+        focusUphWage += wage;
+      }
+
+      if (s.isLateCarryOver || (s.specialNote && /ล่าช้า|รวมยอด/.test(s.specialNote))) {
+        focusLateCount += 1;
+      }
+
+      // Worker aggregation
+      const wKey = (s.workerCode || s.workerName || 'UNKNOWN').toLowerCase();
+      if (!workerAgg.has(wKey)) {
+        workerAgg.set(wKey, {
+          code: s.workerCode || '-',
+          name: s.workerName || 'ไม่ระบุ',
+          dept: s.workerDept || 'หุ้ม',
+          units: 0,
+          wage: 0
+        });
+      }
+      const wObj = workerAgg.get(wKey);
+      wObj.units += units;
+      wObj.wage += wage;
+
+      // Daily rhythm (day 1..31)
+      if (s.sheetDate && /^\d{4}-\d{2}-\d{2}$/.test(s.sheetDate)) {
+        const day = parseInt(s.sheetDate.slice(8, 10), 10);
+        if (day >= 1 && day <= 31) {
+          dailyUnits[day - 1] += units;
+          dailyWages[day - 1] += wage;
+        }
+      }
+
+      // SKU aggregation
+      (s.items || []).forEach(it => {
+        const skuCode = (it.matchedSku || 'ไม่ระบุ').toUpperCase();
+        if (!skuAgg.has(skuCode)) {
+          const foundMaster = skuMaster.find(m => m.model.toUpperCase() === skuCode);
+          skuAgg.set(skuCode, {
+            sku: skuCode,
+            name: foundMaster ? foundMaster.name : skuCode,
+            units: 0,
+            wage: 0
+          });
+        }
+        const st = skuAgg.get(skuCode);
+        st.units += (it.qty || 1);
+        st.wage += (it.lineTotal || 0);
+      });
+    });
+
+    // Update KPI 1: Total Wage & MoM
+    const elTotalWage = document.getElementById('dash-kpi-total-wage');
+    const elMomBadge = document.getElementById('dash-kpi-mom-badge');
+    if (elTotalWage) elTotalWage.textContent = `${focusTotalWage.toLocaleString('th-TH', { minimumFractionDigits: 2 })} ฿`;
+
+    if (elMomBadge) {
+      let targetMonthObj = null;
+      let prevMonthObj = null;
+      if (activeFocusMonth !== 'ALL') {
+        const idx = sortedMonths.findIndex(m => m.ym === activeFocusMonth);
+        if (idx >= 0) targetMonthObj = sortedMonths[idx];
+        if (idx > 0) prevMonthObj = sortedMonths[idx - 1];
+      } else if (sortedMonths.length >= 2) {
+        targetMonthObj = sortedMonths[sortedMonths.length - 1];
+        prevMonthObj = sortedMonths[sortedMonths.length - 2];
+      }
+
+      if (targetMonthObj && prevMonthObj && prevMonthObj.totalWage > 0) {
+        const diffPct = ((targetMonthObj.totalWage - prevMonthObj.totalWage) / prevMonthObj.totalWage) * 100;
+        const sign = diffPct >= 0 ? '▲ +' : '▼ ';
+        elMomBadge.className = `text-[10px] font-black block ${diffPct >= 0 ? 'text-amber-300' : 'text-emerald-300'}`;
+        elMomBadge.textContent = `${sign}${diffPct.toFixed(1)}% เทียบ ${formatMonthKeyLabel(prevMonthObj.ym)}`;
+      } else {
+        elMomBadge.className = 'text-[10px] font-bold text-slate-300 block';
+        elMomBadge.textContent = `รวมจาก ${focusSheets.length} ใบงาน`;
+      }
+    }
+
+    // Update KPI 2: P1 vs P2
+    document.getElementById('dash-kpi-p1-wage').textContent = `${focusP1Wage.toLocaleString('th-TH')} ฿`;
+    document.getElementById('dash-kpi-p2-wage').textContent = `${focusP2Wage.toLocaleString('th-TH')} ฿`;
+    const p1Pct = focusTotalWage > 0 ? Math.round((focusP1Wage / focusTotalWage) * 100) : 0;
+    const p2Pct = focusTotalWage > 0 ? 100 - p1Pct : 0;
+    document.getElementById('dash-kpi-p1p2-ratio').textContent = `สัดส่วน วิก 1 (${p1Pct}%) : วิก 2 (${p2Pct}%)`;
+
+    // Update KPI 3: Total Units & Avg Cost/Unit
+    document.getElementById('dash-kpi-total-units').textContent = `${focusUnits.toLocaleString('th-TH')} ชิ้น`;
+    const avgCost = focusUnits > 0 ? focusTotalWage / focusUnits : 0;
+    document.getElementById('dash-kpi-avg-cost').textContent = `ต้นทุนค่าแรงเฉลี่ย ${avgCost.toFixed(2)} บาท/ชิ้น`;
+
+    // Update KPI 4: Upholstery vs Sewing Split
+    document.getElementById('dash-kpi-uph-wage').textContent = `${focusUphWage.toLocaleString('th-TH')} ฿`;
+    document.getElementById('dash-kpi-sew-wage').textContent = `${focusSewWage.toLocaleString('th-TH')} ฿`;
+    const uphPct = focusTotalWage > 0 ? Math.round((focusUphWage / focusTotalWage) * 100) : 0;
+    const sewPct = focusTotalWage > 0 ? 100 - uphPct : 0;
+    document.getElementById('dash-kpi-dept-ratio').textContent = `สัดส่วน หุ้ม ${uphPct}% | เย็บ ${sewPct}%`;
+
+    // Update KPI 5: Top Worker MVP
+    const sortedWorkers = Array.from(workerAgg.values()).sort((a, b) => b.wage - a.wage);
+    const topW = sortedWorkers[0];
+    if (topW) {
+      document.getElementById('dash-kpi-top-worker').textContent = `${topW.name} (${topW.code} - ${topW.dept})`;
+      document.getElementById('dash-kpi-top-worker-sub').textContent = `${topW.units.toLocaleString()} ชิ้น | ${topW.wage.toLocaleString('th-TH')} บาท`;
+    } else {
+      document.getElementById('dash-kpi-top-worker').textContent = '-';
+      document.getElementById('dash-kpi-top-worker-sub').textContent = 'ยังไม่มีข้อมูล';
+    }
+
+    // Update KPI 6: Late Submission Alert
+    document.getElementById('dash-kpi-late-sheets').textContent = `${focusLateCount} ใบ`;
+    document.getElementById('dash-kpi-late-sub').textContent = `จากใบงานทั้งหมด ${focusSheets.length} ใบ`;
+
+    // Render 4 Charts
+    renderMonthlyTrendChart(sortedMonths, deptFilteredSheets, trendMode);
+    renderSkuMixChart(Array.from(skuAgg.values()));
+    renderWorkerRankChart(sortedWorkers.slice(0, 12));
+    renderDailyRhythmChart(dailyUnits, dailyWages);
+
+    // Render Historical Monthly Comparison Table
+    renderMonthlyComparisonTable(sortedMonths);
+  }
+
+  function renderMonthlyTrendChart(sortedMonths, deptFilteredSheets, trendMode) {
+    const canvas = document.getElementById('chart-monthly-trend');
+    if (!canvas || typeof Chart === 'undefined') return;
+
+    if (chartMonthlyTrend) {
+      chartMonthlyTrend.destroy();
+      chartMonthlyTrend = null;
+    }
+
+    let labels = [];
+    let uphData = [];
+    let sewData = [];
+    let unitsData = [];
+
+    if (trendMode === 'PERIOD') {
+      // Group by Bi-Monthly Period (YYYY-MM-P1, YYYY-MM-P2)
+      const periodMap = new Map();
+      deptFilteredSheets.forEach(s => {
+        const pk = s.payrollPeriodKey || '2026-06-P1';
+        if (!periodMap.has(pk)) {
+          periodMap.set(pk, { pk, uph: 0, sew: 0, units: 0 });
+        }
+        const entry = periodMap.get(pk);
+        if (s.workerDept === 'เย็บ') entry.sew += (s.totalWage || 0);
+        else entry.uph += (s.totalWage || 0);
+        entry.units += (s.totalUnits || 0);
+      });
+      const sortedPeriods = Array.from(periodMap.values()).sort((a, b) => a.pk.localeCompare(b.pk));
+      labels = sortedPeriods.map(p => {
+        const ym = p.pk.slice(0, 7);
+        const half = p.pk.endsWith('-P1') ? 'วิก1 (1-15)' : 'วิก2 (16-สิ้น)';
+        return `${formatMonthKeyLabel(ym)} ${half}`;
+      });
+      uphData = sortedPeriods.map(p => p.uph);
+      sewData = sortedPeriods.map(p => p.sew);
+      unitsData = sortedPeriods.map(p => p.units);
+    } else {
+      labels = sortedMonths.map(m => formatMonthKeyLabel(m.ym, true));
+      uphData = sortedMonths.map(m => m.uphWage);
+      sewData = sortedMonths.map(m => m.sewWage);
+      unitsData = sortedMonths.map(m => m.totalUnits);
+    }
+
+    chartMonthlyTrend = new Chart(canvas.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: '🔨 ค่าแรงช่างหุ้ม (บาท)',
+            data: uphData,
+            backgroundColor: 'rgba(245, 158, 11, 0.85)',
+            borderColor: 'rgb(217, 119, 6)',
+            borderWidth: 1,
+            borderRadius: 6,
+            stack: 'wageStack',
+            yAxisID: 'y'
+          },
+          {
+            label: '🧵 ค่าแรงช่างเย็บ (บาท)',
+            data: sewData,
+            backgroundColor: 'rgba(16, 185, 129, 0.85)',
+            borderColor: 'rgb(5, 150, 105)',
+            borderWidth: 1,
+            borderRadius: 6,
+            stack: 'wageStack',
+            yAxisID: 'y'
+          },
+          {
+            type: 'line',
+            label: '🛋️ จำนวนชิ้นงานรวม (ชิ้น)',
+            data: unitsData,
+            borderColor: 'rgb(124, 58, 237)',
+            backgroundColor: 'rgba(124, 58, 237, 0.15)',
+            borderWidth: 3,
+            pointRadius: 4,
+            pointBackgroundColor: 'rgb(124, 58, 237)',
+            tension: 0.3,
+            yAxisID: 'y1'
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'top', labels: { font: { size: 11, weight: 'bold' } } }
+        },
+        scales: {
+          x: { stacked: true },
+          y: {
+            stacked: true,
+            position: 'left',
+            title: { display: true, text: 'ยอดค่าแรง (บาท)' }
+          },
+          y1: {
+            position: 'right',
+            grid: { drawOnChartArea: false },
+            title: { display: true, text: 'จำนวนชิ้นงาน (ชิ้น)' }
+          }
+        }
+      }
+    });
+  }
+
+  function renderSkuMixChart(skuList) {
+    const canvas = document.getElementById('chart-sku-mix');
+    if (!canvas || typeof Chart === 'undefined') return;
+
+    if (chartSkuMix) {
+      chartSkuMix.destroy();
+      chartSkuMix = null;
+    }
+
+    const sorted = skuList.sort((a, b) => b.wage - a.wage);
+    const top8 = sorted.slice(0, 8);
+    const labels = top8.map(s => `${s.sku} (${s.units} ชิ้น)`);
+    const data = top8.map(s => s.wage);
+
+    const palette = [
+      '#10b981', '#6366f1', '#f59e0b', '#ec4899',
+      '#06b6d4', '#8b5cf6', '#ef4444', '#64748b'
+    ];
+
+    chartSkuMix = new Chart(canvas.getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: labels.length ? labels : ['ยังไม่มีข้อมูล'],
+        datasets: [{
+          data: data.length ? data : [1],
+          backgroundColor: data.length ? palette.slice(0, data.length) : ['#e2e8f0'],
+          borderWidth: 2,
+          borderColor: '#ffffff'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'right', labels: { font: { size: 11, weight: 'bold' } } }
+        }
+      }
+    });
+  }
+
+  function renderWorkerRankChart(topWorkers) {
+    const canvas = document.getElementById('chart-worker-rank');
+    if (!canvas || typeof Chart === 'undefined') return;
+
+    if (chartWorkerRank) {
+      chartWorkerRank.destroy();
+      chartWorkerRank = null;
+    }
+
+    const labels = topWorkers.map(w => `${w.name} (${w.code})`);
+    const wages = topWorkers.map(w => w.wage);
+    const colors = topWorkers.map(w => w.dept === 'เย็บ' ? 'rgba(16, 185, 129, 0.85)' : 'rgba(245, 158, 11, 0.85)');
+
+    chartWorkerRank = new Chart(canvas.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'ยอดค่าแรงรวม (บาท) [สีส้ม=ช่างหุ้ม, สีเขียว=ช่างเย็บ]',
+          data: wages,
+          backgroundColor: colors,
+          borderRadius: 6
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'top', labels: { font: { size: 11, weight: 'bold' } } }
+        },
+        scales: {
+          x: { title: { display: true, text: 'ยอดค่าแรงสุทธิ (บาท)' } }
+        }
+      }
+    });
+  }
+
+  function renderDailyRhythmChart(dailyUnits, dailyWages) {
+    const canvas = document.getElementById('chart-daily-rhythm');
+    if (!canvas || typeof Chart === 'undefined') return;
+
+    if (chartDailyRhythm) {
+      chartDailyRhythm.destroy();
+      chartDailyRhythm = null;
+    }
+
+    const labels = Array.from({ length: 31 }, (_, i) => `${i + 1}`);
+    const barColors = labels.map((_, i) => {
+      const day = i + 1;
+      // Highlight cut-off days (14-15 and 29-31)
+      if (day === 15 || day >= 30) return 'rgba(225, 29, 72, 0.85)';
+      return 'rgba(79, 70, 229, 0.75)';
+    });
+
+    chartDailyRhythm = new Chart(canvas.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'จำนวนชิ้นงานรายวัน (สีแดง = วันตัดวิก 15 & สิ้นเดือน)',
+            data: dailyUnits,
+            backgroundColor: barColors,
+            borderRadius: 4,
+            yAxisID: 'y'
+          },
+          {
+            type: 'line',
+            label: 'ยอดค่าแรงรายวัน (บาท)',
+            data: dailyWages,
+            borderColor: 'rgb(16, 185, 129)',
+            borderWidth: 2,
+            pointRadius: 2,
+            tension: 0.25,
+            yAxisID: 'y1'
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'top', labels: { font: { size: 11, weight: 'bold' } } }
+        },
+        scales: {
+          x: { title: { display: true, text: 'วันที่ในเดือน (1 - 31)' } },
+          y: { position: 'left', title: { display: true, text: 'จำนวนชิ้น' } },
+          y1: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'บาท' } }
+        }
+      }
+    });
+  }
+
+  function renderMonthlyComparisonTable(sortedMonths) {
+    const tbody = document.getElementById('tbody-monthly-comparison');
+    if (!tbody) return;
+
+    if (sortedMonths.length === 0) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="10" class="py-8 text-center text-slate-400">
+            ยังไม่มีข้อมูลใบงานสะสม (กดปุ่ม <strong>"🧪 จำลองข้อมูล 3 เดือนเพื่อดูกราฟ"</strong> ด้านบนเพื่อดูตัวอย่างตารางและกราฟเปรียบเทียบได้ทันทีครับ)
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    // Show newest month on top, but compute MoM against previous chronological month
+    const rowsHtml = sortedMonths.map((m, idx) => {
+      const prev = idx > 0 ? sortedMonths[idx - 1] : null;
+      let momHtml = `<span class="text-slate-400">-</span>`;
+      if (prev && prev.totalWage > 0) {
+        const pct = ((m.totalWage - prev.totalWage) / prev.totalWage) * 100;
+        if (pct > 0) {
+          momHtml = `<span class="px-2 py-0.5 rounded-full text-[11px] font-black bg-amber-100 text-amber-800">▲ +${pct.toFixed(1)}%</span>`;
+        } else if (pct < 0) {
+          momHtml = `<span class="px-2 py-0.5 rounded-full text-[11px] font-black bg-emerald-100 text-emerald-800">▼ ${pct.toFixed(1)}%</span>`;
+        } else {
+          momHtml = `<span class="text-slate-500 font-bold">0.0%</span>`;
+        }
+      }
+
+      const avg = m.totalUnits > 0 ? m.totalWage / m.totalUnits : 0;
+
+      return `
+        <tr class="hover:bg-slate-50">
+          <td class="py-3 px-3 font-black text-slate-900">📅 ${formatMonthKeyLabel(m.ym, true)}</td>
+          <td class="py-3 px-3 text-center font-mono font-bold text-slate-700">${m.sheetCount} ใบ</td>
+          <td class="py-3 px-3 text-center font-mono font-black text-indigo-700">${m.totalUnits.toLocaleString()} ชิ้น</td>
+          <td class="py-3 px-3 text-right font-mono font-bold text-cyan-700">${m.p1Wage.toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+          <td class="py-3 px-3 text-right font-mono font-bold text-amber-700">${m.p2Wage.toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+          <td class="py-3 px-3 text-right font-mono text-slate-700">${m.uphWage.toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+          <td class="py-3 px-3 text-right font-mono text-slate-700">${m.sewWage.toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+          <td class="py-3 px-3 text-right font-mono font-black text-emerald-700 text-sm">${m.totalWage.toLocaleString('th-TH', { minimumFractionDigits: 2 })} ฿</td>
+          <td class="py-3 px-3 text-right font-mono text-slate-600">${avg.toFixed(2)} ฿</td>
+          <td class="py-3 px-3 text-center">${momHtml}</td>
+        </tr>
+      `;
+    }).reverse().join('');
+
+    tbody.innerHTML = rowsHtml;
   }
 
   function escapeHtml(str) {

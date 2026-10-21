@@ -20,6 +20,8 @@
       document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');
     }
   </script>
+  <!-- Chart.js CDN for Executive Monthly Comparison Dashboard -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col">
@@ -80,6 +82,10 @@
         </button>
         <button class="nav-tab-btn py-3 px-4 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-2 whitespace-nowrap transition-colors" data-tab="payroll">
           <span>💰 4. สรุปงวดจ่ายค่าแรง 15 วัน & พิมพ์สลิป</span>
+        </button>
+        <button class="nav-tab-btn py-3 px-4 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-2 whitespace-nowrap transition-colors" data-tab="dashboard">
+          <span>📊 5. แดชบอร์ดผู้บริหาร & กราฟเปรียบเทียบรายเดือน</span>
+          <span class="px-1.5 py-0.5 text-[10px] font-black rounded-full bg-purple-100 text-purple-800">NEW</span>
         </button>
       </div>
     </div>
@@ -700,6 +706,234 @@
 
     </div>
 
+    <!-- ======================================================================= -->
+    <!-- TAB 5: 📊 EXECUTIVE MONTHLY DASHBOARD & COMPARISON CHARTS               -->
+    <!-- ======================================================================= -->
+    <div id="tab-panel-dashboard" class="tab-panel hidden space-y-6">
+
+      <!-- Top Executive Banner & Controls -->
+      <div class="bg-gradient-to-br from-slate-900 via-purple-950 to-indigo-950 text-white rounded-3xl p-6 shadow-xl border border-purple-700/40 space-y-5">
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-white/10 pb-4">
+          <div class="space-y-1">
+            <div class="inline-flex items-center gap-2 px-3 py-0.5 rounded-full bg-purple-500/20 border border-purple-400/30 text-purple-200 text-[11px] font-black">
+              <span>📊 Executive Payroll & Productivity Analytics</span>
+            </div>
+            <h2 class="text-xl sm:text-2xl font-black">
+              แดชบอร์ดภาพรวมการจ่ายค่าแรงทั้งเดือน & กราฟเปรียบเทียบย้อนหลัง
+            </h2>
+            <p class="text-xs text-slate-300">
+              วิเคราะห์แนวโน้มค่าแรงรายเดือน/รายวิก (1–15 vs 16–สิ้นเดือน), สัดส่วนต้นทุนค่าแรงแยกตามรุ่นสินค้า (SKU), อันดับผลงานช่าง และจังหวะการส่งใบงานรายวัน
+            </p>
+          </div>
+
+          <!-- Demo Data & Historical Backup Actions -->
+          <div class="flex items-center gap-2 flex-wrap">
+            <button type="button" id="btn-seed-demo-months" class="px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs rounded-xl shadow-md transition flex items-center gap-1.5 cursor-pointer" title="สร้างข้อมูลจำลอง 3 เดือน (พ.ค.–ก.ค. 69) เพื่อให้เห็นกราฟเปรียบเทียบชัดเจน">
+              <span>🧪 จำลองข้อมูล 3 เดือนเพื่อดูกราฟ</span>
+            </button>
+            <button type="button" id="btn-clear-demo-months" class="px-3 py-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-400/30 font-bold text-xs rounded-xl transition cursor-pointer" title="ลบเฉพาะข้อมูลจำลอง (ใบงานจริงไม่หาย)">
+              <span>🗑️ ล้างข้อมูลจำลอง</span>
+            </button>
+            <button type="button" id="btn-backup-history-json" class="px-3 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 border border-emerald-400/30 font-bold text-xs rounded-xl transition cursor-pointer" title="ดาวน์โหลดไฟล์สำรองข้อมูลประวัติใบงานและตารางจับคู่ทั้งหมดเก็บไว้ในคอมพิวเตอร์">
+              <span>💾 สำรองประวัติ (.json)</span>
+            </button>
+            <label for="file-restore-history-json" class="px-3 py-2 bg-white/10 hover:bg-white/20 text-white border border-white/20 font-bold text-xs rounded-xl transition cursor-pointer">
+              <span>📂 กู้คืนประวัติ (.json)</span>
+            </label>
+            <input type="file" id="file-restore-history-json" accept=".json" class="hidden">
+          </div>
+        </div>
+
+        <!-- Dashboard Filters: Focus Month & Trend View Mode -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <div>
+            <label class="block text-purple-200 font-bold mb-1">📅 เลือกเดือนที่ต้องการดูเจาะลึก (Focus Month):</label>
+            <select id="dash-select-month" class="w-full px-3 py-2 rounded-xl bg-white text-slate-900 font-black outline-none">
+              <option value="ALL">ทุกเดือนรวมกัน (All Months)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-purple-200 font-bold mb-1">📈 รูปแบบกราฟเปรียบเทียบแนวโน้ม:</label>
+            <select id="dash-select-trend-mode" class="w-full px-3 py-2 rounded-xl bg-white text-slate-900 font-bold outline-none">
+              <option value="MONTHLY">เปรียบเทียบรายเดือน (รวมทั้งเดือน วิก 1 + วิก 2)</option>
+              <option value="PERIOD">เปรียบเทียบรายงวด 15 วัน (แยกวิก 1 วันที่ 1–15 vs วิก 2 วันที่ 16–สิ้นเดือน)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-purple-200 font-bold mb-1">👷 กรองแผนกช่าง:</label>
+            <select id="dash-select-dept" class="w-full px-3 py-2 rounded-xl bg-white text-slate-900 font-bold outline-none">
+              <option value="ALL">ทุกแผนกรวมกัน (ช่างหุ้ม + ช่างเย็บ)</option>
+              <option value="หุ้ม">🔨 เฉพาะแผนกช่างหุ้ม</option>
+              <option value="เย็บ">🧵 เฉพาะแผนกช่างเย็บ</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 6 Executive KPI & Insight Cards -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+          <!-- KPI 1: Monthly Total Wage & MoM % -->
+          <div class="bg-white/10 border border-white/15 p-4 rounded-2xl space-y-1">
+            <span class="text-[11px] text-purple-200 font-bold block">💵 ยอดจ่ายค่าแรงรวม</span>
+            <span id="dash-kpi-total-wage" class="text-2xl font-black text-emerald-300 block">0.00 ฿</span>
+            <span id="dash-kpi-mom-badge" class="text-[10px] font-bold text-slate-300 block">เทียบเดือนก่อน: -</span>
+          </div>
+
+          <!-- KPI 2: P1 vs P2 Comparison -->
+          <div class="bg-white/10 border border-white/15 p-4 rounded-2xl space-y-1">
+            <span class="text-[11px] text-purple-200 font-bold block">⚖️ เทียบวิก 1 vs วิก 2</span>
+            <div class="text-xs font-black text-white flex items-center justify-between">
+              <span>วิก 1 (1–15):</span>
+              <span id="dash-kpi-p1-wage" class="text-cyan-300 font-mono">0 ฿</span>
+            </div>
+            <div class="text-xs font-black text-white flex items-center justify-between">
+              <span>วิก 2 (16–สิ้น):</span>
+              <span id="dash-kpi-p2-wage" class="text-amber-300 font-mono">0 ฿</span>
+            </div>
+            <span id="dash-kpi-p1p2-ratio" class="text-[10px] text-slate-300 block">สัดส่วน 50% : 50%</span>
+          </div>
+
+          <!-- KPI 3: Total Units & Avg Wage/Unit -->
+          <div class="bg-white/10 border border-white/15 p-4 rounded-2xl space-y-1">
+            <span class="text-[11px] text-purple-200 font-bold block">🛋️ ยอดผลิตรวม & เฉลี่ย/ชิ้น</span>
+            <span id="dash-kpi-total-units" class="text-2xl font-black text-cyan-300 block">0 ชิ้น</span>
+            <span id="dash-kpi-avg-cost" class="text-[10px] font-bold text-slate-300 block">เฉลี่ย 0.00 บาท/ชิ้น</span>
+          </div>
+
+          <!-- KPI 4: Upholstery vs Sewing Split -->
+          <div class="bg-white/10 border border-white/15 p-4 rounded-2xl space-y-1">
+            <span class="text-[11px] text-purple-200 font-bold block">🔨 หุ้ม vs 🧵 เย็บ</span>
+            <div class="text-xs font-bold text-amber-300 flex justify-between">
+              <span>🔨 ช่างหุ้ม:</span>
+              <span id="dash-kpi-uph-wage" class="font-mono">0 ฿</span>
+            </div>
+            <div class="text-xs font-bold text-emerald-300 flex justify-between">
+              <span>🧵 ช่างเย็บ:</span>
+              <span id="dash-kpi-sew-wage" class="font-mono">0 ฿</span>
+            </div>
+            <span id="dash-kpi-dept-ratio" class="text-[10px] text-slate-300 block">หุ้ม 0% | เย็บ 0%</span>
+          </div>
+
+          <!-- KPI 5: Top Worker MVP -->
+          <div class="bg-white/10 border border-white/15 p-4 rounded-2xl space-y-1">
+            <span class="text-[11px] text-amber-300 font-bold block">🏆 ช่างยอดเยี่ยม (Top MVP)</span>
+            <span id="dash-kpi-top-worker" class="text-sm font-black text-white truncate block">-</span>
+            <span id="dash-kpi-top-worker-sub" class="text-[10px] font-bold text-emerald-300 block">0 ชิ้น (0 ฿)</span>
+          </div>
+
+          <!-- KPI 6: Late Submission / Carry-Over Alert -->
+          <div class="bg-white/10 border border-white/15 p-4 rounded-2xl space-y-1">
+            <span class="text-[11px] text-rose-300 font-bold block">⏰ ใบงานส่งล่าช้า/ทบวิก</span>
+            <span id="dash-kpi-late-sheets" class="text-2xl font-black text-rose-300 block">0 ใบ</span>
+            <span id="dash-kpi-late-sub" class="text-[10px] text-slate-300 block">จากใบงานทั้งหมด 0 ใบ</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 1 Charts: Historical Monthly/Bi-Monthly Trend & SKU Cost Breakdown -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <!-- Left 7 Cols: Monthly / Bi-Monthly Wage & Output Comparison Chart -->
+        <div class="lg:col-span-7 bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="font-black text-sm sm:text-base text-slate-900">
+                📊 1. กราฟเปรียบเทียบยอดจ่ายค่าแรง & จำนวนชิ้นงานย้อนหลัง
+              </h3>
+              <p class="text-[11px] text-slate-500">
+                แท่งสีส้ม = ค่าแรงช่างหุ้ม | แท่งสีเขียว = ค่าแรงช่างเย็บ | เส้นสีม่วง = จำนวนชิ้นงานที่ผลิตได้
+              </p>
+            </div>
+          </div>
+          <div class="h-[320px] relative">
+            <canvas id="chart-monthly-trend"></canvas>
+          </div>
+        </div>
+
+        <!-- Right 5 Cols: SKU Cost Breakdown Doughnut Chart -->
+        <div class="lg:col-span-5 bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3">
+          <div>
+            <h3 class="font-black text-sm sm:text-base text-slate-900">
+              🛋️ 2. สัดส่วนต้นทุนค่าแรงแยกตามรุ่นสินค้า (SKU Mix)
+            </h3>
+            <p class="text-[11px] text-slate-500">
+              ช่วยให้รู้ว่าเดือนนี้โรงงานจ่ายค่าแรงไปกับโซฟา/เตียงรุ่นไหนมากที่สุด (Top 8 SKUs)
+            </p>
+          </div>
+          <div class="h-[320px] relative flex items-center justify-center">
+            <canvas id="chart-sku-mix"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 2 Charts: Worker Productivity Ranking & Daily Output Rhythm (1-31) -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <!-- Left 6 Cols: Worker Productivity Leaderboard -->
+        <div class="lg:col-span-6 bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3">
+          <div>
+            <h3 class="font-black text-sm sm:text-base text-slate-900">
+              🏆 3. จัดอันดับยอดค่าแรง & จำนวนชิ้นงานรายบุคคล (Top 12 ช่าง)
+            </h3>
+            <p class="text-[11px] text-slate-500">
+              เปรียบเทียบผลงานช่างแต่ละคนในเดือนที่เลือก เพื่อประเมินกำลังการผลิตและโบนัสขยัน
+            </p>
+          </div>
+          <div class="h-[320px] relative">
+            <canvas id="chart-worker-rank"></canvas>
+          </div>
+        </div>
+
+        <!-- Right 6 Cols: Daily Output & Cut-Off Spike Analysis -->
+        <div class="lg:col-span-6 bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3">
+          <div>
+            <h3 class="font-black text-sm sm:text-base text-slate-900">
+              📅 4. กราฟจังหวะการผลิตและส่งใบงานรายวัน (วิเคราะห์วันตัดวิก 15 & สิ้นเดือน)
+            </h3>
+            <p class="text-[11px] text-slate-500">
+              ตรวจสอบว่าช่างส่งใบงานสม่ำเสมอทุกวัน หรือชอบดองใบงานมาส่งกระจุกตัววันตัดวิก (วันที่ 15 และ 30)
+            </p>
+          </div>
+          <div class="h-[320px] relative">
+            <canvas id="chart-daily-rhythm"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Historical Monthly & Bi-Monthly Comparison Table -->
+      <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="font-black text-base text-slate-900">
+              📑 ตารางสรุปเปรียบเทียบยอดจ่ายค่าแรงรายเดือน (แยกวิก 1 วันที่ 1–15 และ วิก 2 วันที่ 16–สิ้นเดือน)
+            </h3>
+            <p class="text-xs text-slate-500">
+              บันทึกสะสมไว้ดูเปรียบเทียบต้นทุนค่าแรงแต่ละเดือน พร้อมคำนวณอัตราเปลี่ยนแปลง (% MoM) อัตโนมัติ
+            </p>
+          </div>
+        </div>
+        <div class="overflow-x-auto border border-slate-200 rounded-xl">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead class="bg-slate-100 text-slate-700 border-b border-slate-200">
+              <tr>
+                <th class="py-2.5 px-3">เดือน / ปี</th>
+                <th class="py-2.5 px-3 text-center">จำนวนใบงาน</th>
+                <th class="py-2.5 px-3 text-center">จำนวนชิ้นรวม</th>
+                <th class="py-2.5 px-3 text-right">วิก 1: 1–15 (จ่าย 20)</th>
+                <th class="py-2.5 px-3 text-right">วิก 2: 16–สิ้นเดือน (จ่าย 5)</th>
+                <th class="py-2.5 px-3 text-right">🔨 ค่าแรงช่างหุ้ม</th>
+                <th class="py-2.5 px-3 text-right">🧵 ค่าแรงช่างเย็บ</th>
+                <th class="py-2.5 px-3 text-right">💵 รวมจ่ายทั้งเดือน (บาท)</th>
+                <th class="py-2.5 px-3 text-right">เฉลี่ย/ชิ้น</th>
+                <th class="py-2.5 px-3 text-center">เทียบเดือนก่อน (% MoM)</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-monthly-comparison" class="divide-y divide-slate-100">
+              <!-- Populated via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
   </main>
 
   <!-- ========================================================================= -->
@@ -725,7 +959,7 @@
   </div>
 
   <!-- Scripts -->
-  <script src="payroll-db.js?v=1.2"></script>
-  <script src="app.js?v=1.2"></script>
+  <script src="payroll-db.js?v=1.3"></script>
+  <script src="app.js?v=1.3"></script>
 </body>
 </html>
