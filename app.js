@@ -143,6 +143,11 @@
         btnVerify.innerHTML = '<span>🔍 บันทึก & ตรวจเช็ค API</span>';
 
         if (res.ok) {
+          if (selectModel && Array.isArray(res.availableModels) && res.availableModels.length > 0) {
+            selectModel.innerHTML = res.availableModels.map(m =>
+              `<option value="${escapeHtml(m)}" ${m === res.model ? 'selected' : ''}>⚡ ${escapeHtml(m)}</option>`
+            ).join('');
+          }
           if (selectModel && res.model) selectModel.value = res.model;
           if (pill) {
             pill.className = 'px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-500 text-slate-950';

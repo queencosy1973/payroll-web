@@ -854,54 +854,117 @@ const PayrollDB = (function () {
   // ===========================================================================
   // GEMINI API KEY VERIFICATION & AI VISION OCR ENGINE
   // ===========================================================================
+  async function fetchAvailableGeminiModels(key) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'x-goog-api-key': key }
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      const msg = (data && data.error && data.error.message) ? data.error.message : `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+    const allModels = (data && Array.isArray(data.models)) ? data.models : [];
+    return allModels
+      .filter(m =>
+        m.name &&
+        m.name.includes('gemini') &&
+        Array.isArray(m.supportedGenerationMethods) &&
+        m.supportedGenerationMethods.includes('generateContent') &&
+        !m.name.includes('embedding') &&
+        !m.name.includes('imagen') &&
+        !m.name.includes('veo') &&
+        !m.name.includes('tts') &&
+        !m.name.includes('audio')
+      )
+      .map(m => m.name.replace(/^models\//, ''));
+  }
+
+  function pickBestGeminiModel(availableModels, preferredModel) {
+    if (!Array.isArray(availableModels) || availableModels.length === 0) {
+      return preferredModel || 'gemini-2.5-flash';
+    }
+    if (preferredModel && availableModels.includes(preferredModel)) {
+      return preferredModel;
+    }
+    const priorityOrder = [
+      'gemini-2.5-flash',
+      'gemini-flash-latest',
+      'gemini-3-flash-preview',
+      'gemini-2.5-flash-preview-09-2025',
+      'gemini-2.5-pro',
+      'gemini-pro-latest',
+      'gemini-2.5-flash-lite'
+    ];
+    for (const p of priorityOrder) {
+      if (availableModels.includes(p)) return p;
+    }
+    const anyFlash = availableModels.find(m => m.includes('flash'));
+    return anyFlash || availableModels[0];
+  }
+
   async function verifyGeminiApiKey(apiKeyInput, preferredModel = 'gemini-2.5-flash') {
     const key = String(apiKeyInput || getConfig().geminiApiKey || '').trim();
     if (!key) {
       return { ok: false, message: 'กรุณากรอก Gemini API Key ก่อนกดตรวจสอบ' };
     }
 
-    const modelsToTry = [preferredModel, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'].filter((v, i, a) => v && a.indexOf(v) === i);
-    let lastError = '';
+    try {
+      // 1. Call ModelService.ListModels to validate the key and discover exact supported models
+      const availableModels = await fetchAvailableGeminiModels(key);
+      const chosenModel = pickBestGeminiModel(availableModels, preferredModel);
 
-    for (const modelName of modelsToTry) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(key)}`;
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: 'ตอบคำว่า OK สั้นๆ คำเดียว' }] }],
-            generationConfig: { maxOutputTokens: 10 }
-          })
-        });
+      // 2. Test generateContent WITHOUT restrictive maxOutputTokens (which breaks Gemini 2.5/3 thinking models)
+      const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/${chosenModel}:generateContent?key=${encodeURIComponent(key)}`;
+      const testRes = await fetch(testUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': key
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'OK' }] }]
+        })
+      });
 
-        const data = await response.json();
-        if (response.ok && data && data.candidates) {
-          saveConfig({ geminiApiKey: key, geminiModel: modelName });
-          return {
-            ok: true,
-            model: modelName,
-            message: `เชื่อมต่อสำเร็จ! พร้อมอ่านใบงานด้วยโมเดล ${modelName}`
-          };
-        } else {
-          lastError = (data && data.error && data.error.message) ? data.error.message : `HTTP ${response.status}`;
-        }
-      } catch (err) {
-        lastError = err.message || 'Network Error';
+      const testData = await testRes.json();
+      if (testRes.ok && testData && testData.candidates) {
+        saveConfig({ geminiApiKey: key, geminiModel: chosenModel, availableModels });
+        return {
+          ok: true,
+          model: chosenModel,
+          availableModels,
+          message: `เชื่อมต่อสำเร็จ! พร้อมอ่านใบงานด้วยโมเดล ${chosenModel}`
+        };
       }
-    }
 
-    return {
-      ok: false,
-      message: `ไม่สามารถเชื่อมต่อได้: ${lastError}`
-    };
+      // If ListModels succeeded, the API key is valid even if one specific model had a quota/preview issue
+      if (availableModels.length > 0) {
+        saveConfig({ geminiApiKey: key, geminiModel: chosenModel, availableModels });
+        return {
+          ok: true,
+          model: chosenModel,
+          availableModels,
+          message: `ยืนยัน API Key สำเร็จ! (พบโมเดลที่รองรับ ${availableModels.length} รุ่น เลือกใช้: ${chosenModel})`
+        };
+      }
+
+      const errMsg = (testData && testData.error && testData.error.message) ? testData.error.message : `HTTP ${testRes.status}`;
+      return { ok: false, message: `ไม่สามารถเชื่อมต่อได้: ${errMsg}` };
+    } catch (err) {
+      return {
+        ok: false,
+        message: `ไม่สามารถเชื่อมต่อได้: ${err.message || 'Network Error'}`
+      };
+    }
   }
 
   async function analyzeJobSheetWithGemini(imageDataUrl) {
     const cfg = getConfig();
     const apiKey = (cfg.geminiApiKey || '').trim();
     if (!apiKey) {
-      throw new Error('ยังไม่ได้ตั้งค่า Gemini API Key (กรุณาไปที่แท็บ "4. ตั้งค่าจับคู่ & Gemini API" เพื่อใส่ API Key)');
+      throw new Error('ยังไม่ได้ตั้งค่า Gemini API Key (กรุณาไปที่แท็บ "1. ตารางจับคู่ & ตั้งค่า Gemini API" เพื่อใส่ API Key)');
     }
 
     const base64Match = String(imageDataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
@@ -965,7 +1028,17 @@ ${workerContext}
   ]
 }`;
 
-    const modelsToTry = [cfg.geminiModel || 'gemini-2.5-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'].filter((v, i, a) => v && a.indexOf(v) === i);
+    // Discover available models dynamically if needed
+    let candidateModels = [cfg.geminiModel || 'gemini-2.5-flash', 'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.5-pro'];
+    try {
+      const discovered = await fetchAvailableGeminiModels(apiKey);
+      if (discovered.length > 0) {
+        const best = pickBestGeminiModel(discovered, cfg.geminiModel);
+        candidateModels = [best, ...discovered];
+      }
+    } catch (e) {}
+    const modelsToTry = candidateModels.filter((v, i, a) => v && a.indexOf(v) === i);
+
     let lastErr = null;
 
     for (const modelName of modelsToTry) {
@@ -973,7 +1046,10 @@ ${workerContext}
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
         const response = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey
+          },
           body: JSON.stringify({
             contents: [{
               parts: [
@@ -993,8 +1069,11 @@ ${workerContext}
           throw new Error((resData && resData.error && resData.error.message) || `HTTP ${response.status}`);
         }
 
-        const rawText = resData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        const cleanedJson = rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+        const parts = resData?.candidates?.[0]?.content?.parts || [];
+        const textPart = parts.find(p => p.text && p.text.includes('{')) || parts[parts.length - 1] || {};
+        const rawText = textPart.text || '';
+        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+        const cleanedJson = jsonMatch ? jsonMatch[0] : rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
         const parsed = JSON.parse(cleanedJson);
         return normalizeParsedSheet(parsed, imageDataUrl);
       } catch (err) {
