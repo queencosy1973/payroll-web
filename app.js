@@ -28,9 +28,68 @@
     initReviewWorkspaceUI();
     initPayrollSummaryUI();
     initExecutiveDashboardUI();
+    initCloudSyncUI();
 
     refreshAllViews();
+    PayrollDB.syncFromCloud(false);
   });
+
+  function initCloudSyncUI() {
+    const btnSync = document.getElementById('btn-header-cloud-sync');
+    const badgeSync = document.getElementById('badge-cloud-sync');
+
+    const triggerManualSync = async () => {
+      if (badgeSync) {
+        badgeSync.className = 'px-2.5 py-0.5 text-[10px] font-black rounded-full bg-amber-100 text-amber-800 border border-amber-300 animate-pulse cursor-pointer';
+        badgeSync.textContent = '⏳ กำลังซิงค์ข้อมูลมือถือ ⇄ คอม...';
+      }
+      if (btnSync) btnSync.disabled = true;
+      await PayrollDB.syncFromCloud(false);
+      if (btnSync) btnSync.disabled = false;
+    };
+
+    if (btnSync) btnSync.addEventListener('click', triggerManualSync);
+    if (badgeSync) badgeSync.addEventListener('click', triggerManualSync);
+
+    PayrollDB.onCloudSync((meta) => {
+      const inputKey = document.getElementById('input-gemini-api-key');
+      const selectModel = document.getElementById('select-gemini-model');
+      const cfg = PayrollDB.getConfig();
+      const activeEl = document.activeElement;
+      const isTypingInInput = activeEl && ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeEl.tagName);
+
+      if (inputKey && activeEl !== inputKey && cfg.geminiApiKey) {
+        inputKey.value = cfg.geminiApiKey;
+      }
+      if (selectModel && activeEl !== selectModel && cfg.geminiModel) {
+        selectModel.value = cfg.geminiModel;
+      }
+
+      if (badgeSync) {
+        if (meta && meta.ok) {
+          const timeStr = meta.syncedAt ? meta.syncedAt.toLocaleTimeString('th-TH') : '';
+          badgeSync.className = 'px-2.5 py-0.5 text-[10px] font-black rounded-full bg-cyan-100 text-cyan-800 border border-cyan-300 cursor-pointer';
+          badgeSync.textContent = `☁️ ซิงค์ฐานข้อมูลกลางแล้ว (${timeStr})`;
+        } else {
+          badgeSync.className = 'px-2.5 py-0.5 text-[10px] font-black rounded-full bg-rose-100 text-rose-800 border border-rose-300 cursor-pointer';
+          badgeSync.textContent = `⚠️ ออฟไลน์ (คลิกเพื่อลองซิงค์ใหม่)`;
+        }
+      }
+
+      // Always refresh Queue, Badges, Payroll Summary & Dashboard
+      renderQueueList();
+      renderPayrollDashboard();
+      renderExecutiveDashboard();
+      updateHeaderBadges();
+
+      // Refresh Mapping & Review tables unless the user is actively typing in an input inside them
+      if (!isTypingInInput || !meta.isBackground) {
+        renderSkuMappingTable();
+        renderWorkerMappingTable();
+        renderReviewSelectorAndWorkspace();
+      }
+    });
+  }
 
   function refreshAllViews() {
     renderSkuMappingTable();
@@ -48,7 +107,7 @@
     if (apiBadge) {
       apiBadge.style.cursor = 'pointer';
       apiBadge.onclick = () => {
-        const entered = prompt('🔑 ตั้งค่า Gemini API Key สำหรับเครื่องนี้ (วางคีย์แล้วกดตกลง):', cfg.geminiApiKey || '');
+        const entered = prompt('🔑 ตั้งค่า Gemini API Key (วางคีย์แล้วกดตกลง ระบบจะซิงค์ให้ทุกเครื่องอัตโนมัติ):', cfg.geminiApiKey || '');
         if (entered && entered.trim()) {
           PayrollDB.saveConfig({ geminiApiKey: entered.trim() });
           const inputKey = document.getElementById('input-gemini-api-key');
@@ -65,8 +124,9 @@
       }
     }
 
+    const queueItems = PayrollDB.getQueueItems();
     const qCount = document.getElementById('badge-queue-count');
-    if (qCount) qCount.textContent = String(captureQueue.length);
+    if (qCount) qCount.textContent = String(queueItems.length);
 
     const sheets = PayrollDB.getSavedSheets();
     const sCount = document.getElementById('badge-sheets-count');
@@ -600,8 +660,8 @@
     }
 
     if (btnClearFinished) {
-      btnClearFinished.addEventListener('click', () => {
-        captureQueue = captureQueue.filter(q => q.status !== 'DONE');
+      btnClearFinished.addEventListener('click', async () => {
+        await PayrollDB.clearFinishedQueueItems();
         renderQueueList();
         updateHeaderBadges();
       });
@@ -713,7 +773,7 @@
       flash.classList.add('shutter-flash');
     }
 
-    const maxDim = 1600;
+    const maxDim = 1280;
     let w = video.videoWidth || 1280;
     let h = video.videoHeight || 960;
     if (w > maxDim || h > maxDim) {
@@ -730,16 +790,18 @@
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, w, h);
 
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.80);
+    const currentQ = PayrollDB.getQueueItems();
     const item = {
-      id: 'Q-' + Date.now() + '-' + Math.random().toString(36).slice(2, 5),
-      name: `ภาพถ่ายใบงาน #${captureQueue.length + 1} (${new Date().toLocaleTimeString('th-TH')})`,
+      id: 'Q-' + Date.now() + '-' + Math.random().toString(36).slice(2, 5).toUpperCase(),
+      name: `ภาพถ่ายใบงาน #${currentQ.length + 1} (${new Date().toLocaleTimeString('th-TH')})`,
       imageDataUrl: dataUrl,
       status: 'PENDING',
       errorMsg: '',
-      sheetId: null
+      sheetId: null,
+      createdAt: new Date().toISOString()
     };
-    captureQueue.unshift(item);
+    PayrollDB.upsertQueueItem(item, true);
     renderQueueList();
     updateHeaderBadges();
 
@@ -756,16 +818,17 @@
     imageFiles.forEach(file => {
       const reader = new FileReader();
       reader.onload = (e) => {
-        resizeImageDataUrl(e.target.result, 1600, 0.85).then(resizedUrl => {
+        resizeImageDataUrl(e.target.result, 1280, 0.80).then(resizedUrl => {
           const item = {
-            id: 'Q-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
-            name: file.name,
+            id: 'Q-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase(),
+            name: file.name || `ภาพใบงาน (${new Date().toLocaleTimeString('th-TH')})`,
             imageDataUrl: resizedUrl,
             status: 'PENDING',
             errorMsg: '',
-            sheetId: null
+            sheetId: null,
+            createdAt: new Date().toISOString()
           };
-          captureQueue.unshift(item);
+          PayrollDB.upsertQueueItem(item, true);
           renderQueueList();
           updateHeaderBadges();
 
@@ -779,7 +842,7 @@
     });
   }
 
-  function resizeImageDataUrl(dataUrl, maxDim = 1600, quality = 0.85) {
+  function resizeImageDataUrl(dataUrl, maxDim = 1280, quality = 0.80) {
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
@@ -809,11 +872,12 @@
   }
 
   async function processQueueItem(queueId) {
-    const item = captureQueue.find(q => q.id === queueId);
+    const queueItems = PayrollDB.getQueueItems();
+    const item = queueItems.find(q => q.id === queueId);
     if (!item || item.status === 'PROCESSING') return;
 
     if (!PayrollDB.getConfig().geminiApiKey) {
-      const entered = prompt('🔑 เครื่องนี้ยังไม่ได้ใส่ Gemini API Key\nกรุณาวาง Gemini API Key ของคุณที่นี่ (ใส่ครั้งเดียวระบบจะจำไว้ในเครื่องนี้ตลอดไป):');
+      const entered = prompt('🔑 เครื่องนี้ยังไม่ได้ใส่ Gemini API Key\nกรุณาวาง Gemini API Key ของคุณที่นี่ (ใส่ครั้งเดียวระบบจะซิงค์ให้ทุกเครื่องอัตโนมัติ):');
       if (entered && entered.trim()) {
         PayrollDB.saveConfig({ geminiApiKey: entered.trim() });
         const inputKey = document.getElementById('input-gemini-api-key');
@@ -824,6 +888,7 @@
 
     item.status = 'PROCESSING';
     item.errorMsg = '';
+    PayrollDB.upsertQueueItem(item, true);
     renderQueueList();
 
     try {
@@ -831,17 +896,20 @@
       const saved = PayrollDB.upsertSheet(parsedSheet);
       item.status = 'DONE';
       item.sheetId = saved.id;
+      PayrollDB.upsertQueueItem(item, true);
       activeSheetId = saved.id;
       refreshAllViews();
     } catch (err) {
       item.status = 'ERROR';
       item.errorMsg = err.message || 'เกิดข้อผิดพลาดในการอ่านรูปใบงาน';
+      PayrollDB.upsertQueueItem(item, true);
       renderQueueList();
     }
   }
 
   async function processAllPendingQueue() {
-    const pending = captureQueue.filter(q => q.status === 'PENDING' || q.status === 'ERROR');
+    const queueItems = PayrollDB.getQueueItems();
+    const pending = queueItems.filter(q => q.status === 'PENDING' || q.status === 'ERROR');
     if (pending.length === 0) {
       alert('ไม่มีรายการที่รออ่านในคิว');
       return;
@@ -855,19 +923,20 @@
     const container = document.getElementById('queue-list-container');
     if (!container) return;
 
-    if (captureQueue.length === 0) {
+    const queueItems = PayrollDB.getQueueItems();
+    if (queueItems.length === 0) {
       container.innerHTML = `
         <div class="text-center py-8 text-slate-400">
-          ยังไม่มีใบงานในคิว กดถ่ายรูปหรือลากไฟล์รูปมาวางได้เลยครับ
+          ยังไม่มีใบงานในคิว (สามารถใช้มือถือถ่ายรูปใบงาน แล้วเปิดดูบนจอคอมพิวเตอร์นี้ได้ทันทีครับ)
         </div>
       `;
       return;
     }
 
-    container.innerHTML = captureQueue.map(q => {
+    container.innerHTML = queueItems.map(q => {
       let badgeHtml = '';
       if (q.status === 'PENDING') {
-        badgeHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700">รออ่าน</span>`;
+        badgeHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700">☁️ รออ่าน</span>`;
       } else if (q.status === 'PROCESSING') {
         badgeHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 animate-pulse">⏳ AI กำลังอ่าน...</span>`;
       } else if (q.status === 'DONE') {
@@ -889,6 +958,7 @@
             ${badgeHtml}
             ${q.status === 'DONE' && q.sheetId ? `<button type="button" class="btn-open-done-sheet px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-[11px]" data-sheet-id="${q.sheetId}">ดูผลลัพธ์</button>` : ''}
             ${(q.status === 'PENDING' || q.status === 'ERROR') ? `<button type="button" class="btn-retry-queue px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-[11px]" data-qid="${q.id}">อ่านด้วย AI</button>` : ''}
+            <button type="button" class="btn-del-queue-item px-1.5 py-1 text-slate-400 hover:text-rose-600 font-bold text-xs" data-qid="${q.id}" title="ลบออกจากคิว">✕</button>
           </div>
         </div>
       `;
@@ -904,6 +974,15 @@
     container.querySelectorAll('.btn-retry-queue').forEach(btn => {
       btn.addEventListener('click', () => {
         processQueueItem(btn.getAttribute('data-qid'));
+      });
+    });
+
+    container.querySelectorAll('.btn-del-queue-item').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const qid = btn.getAttribute('data-qid');
+        await PayrollDB.deleteQueueItem(qid, true);
+        renderQueueList();
+        updateHeaderBadges();
       });
     });
   }

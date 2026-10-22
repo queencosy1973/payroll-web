@@ -222,6 +222,25 @@ const PayrollDB = (function () {
   ];
 
   let supabaseClient = null;
+  let memorySheets = null;
+  let memoryQueue = [];
+  let cloudSyncListeners = [];
+  let isSyncingFromCloud = false;
+  let lastCloudSyncTime = null;
+
+  function onCloudSync(cb) {
+    if (typeof cb === 'function') cloudSyncListeners.push(cb);
+  }
+
+  function notifyCloudSync(meta = {}) {
+    cloudSyncListeners.forEach(cb => {
+      try { cb(meta); } catch (e) { console.warn('Cloud sync listener error:', e); }
+    });
+  }
+
+  function getLastCloudSyncTime() {
+    return lastCloudSyncTime;
+  }
 
   function getConfig() {
     try {
@@ -246,26 +265,52 @@ const PayrollDB = (function () {
     }
   }
 
-  function saveConfig(newCfg) {
+  function saveConfig(newCfg, skipCloudPush = false) {
     const merged = { ...getConfig(), ...newCfg };
     localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(merged));
     initSupabase();
+    if (!skipCloudPush) {
+      pushConfigAndMappingsToCloud().catch(e => console.warn('Cloud config push warning:', e));
+    }
     return merged;
   }
 
   function initSupabase() {
     const cfg = getConfig();
-    if (typeof window !== 'undefined' && window.supabase && cfg.supabaseUrl && cfg.supabaseKey) {
+    if (typeof window !== 'undefined' && window.supabase && cfg.supabaseUrl && cfg.supabaseKey && !supabaseClient) {
       try {
         supabaseClient = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey);
+        setupRealtimeSubscription();
       } catch (e) {
         console.warn('Supabase init warning:', e);
       }
     }
   }
 
+  function setupRealtimeSubscription() {
+    if (!supabaseClient) return;
+    try {
+      supabaseClient
+        .channel('qc-payroll-cloud-sync')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'production_batches' },
+          (payload) => {
+            const src = payload?.new?.source || payload?.old?.source || '';
+            const bid = payload?.new?.batch_id || payload?.old?.batch_id || '';
+            if (src.startsWith('QC_PAYROLL_') || bid.startsWith('QC_PAYROLL_')) {
+              syncFromCloud(true);
+            }
+          }
+        )
+        .subscribe();
+    } catch (e) {
+      console.warn('Realtime subscription warning:', e);
+    }
+  }
+
   // ===========================================================================
-  // SKU & WORKER MAPPING MANAGEMENT
+  // SKU & WORKER MAPPING MANAGEMENT (SHARED ACROSS ALL DEVICES VIA CLOUD)
   // ===========================================================================
   function getSkuMappings() {
     try {
@@ -278,9 +323,12 @@ const PayrollDB = (function () {
     return JSON.parse(JSON.stringify(DEFAULT_SKU_MAPPINGS));
   }
 
-  function saveSkuMappings(list) {
+  function saveSkuMappings(list, skipCloudPush = false) {
     if (!Array.isArray(list)) return;
     localStorage.setItem(STORAGE_KEYS.SKU_MAP, JSON.stringify(list));
+    if (!skipCloudPush) {
+      pushConfigAndMappingsToCloud().catch(e => console.warn('Cloud SKU push warning:', e));
+    }
   }
 
   function getWorkerMappings() {
@@ -294,9 +342,12 @@ const PayrollDB = (function () {
     return JSON.parse(JSON.stringify(DEFAULT_WORKER_MAPPINGS));
   }
 
-  function saveWorkerMappings(list) {
+  function saveWorkerMappings(list, skipCloudPush = false) {
     if (!Array.isArray(list)) return;
     localStorage.setItem(STORAGE_KEYS.WORKER_MAP, JSON.stringify(list));
+    if (!skipCloudPush) {
+      pushConfigAndMappingsToCloud().catch(e => console.warn('Cloud worker push warning:', e));
+    }
   }
 
   function resetMappingsToDefault() {
@@ -1206,36 +1257,191 @@ ${workerContext}
   }
 
   // ===========================================================================
-  // SAVED JOB SHEETS STORAGE & PAYROLL AGGREGATION
+  // REAL-TIME MULTI-DEVICE CLOUD DATABASE SYNC (SUPABASE PostgreSQL JSONB)
+  // Uses isolated namespace source IN ('QC_PAYROLL_CONFIG','QC_PAYROLL_SHEET','QC_PAYROLL_QUEUE')
+  // and status = 'COMPLETED' so traceability-web (which only reads PENDING/APPROVED) is untouched.
+  // ===========================================================================
+  async function cloudUpsertBatchRow(rowPayload) {
+    const cfg = getConfig();
+    const sUrl = cfg.supabaseUrl || DEFAULT_SUPABASE_URL;
+    const sKey = cfg.supabaseKey || DEFAULT_SUPABASE_KEY;
+    if (!sUrl || !sKey) return false;
+
+    const res = await fetch(`${sUrl}/rest/v1/production_batches?on_conflict=batch_id`, {
+      method: 'POST',
+      headers: {
+        'apikey': sKey,
+        'Authorization': `Bearer ${sKey}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      },
+      body: JSON.stringify(rowPayload)
+    });
+    return res.ok;
+  }
+
+  async function cloudDeleteBatchRow(batchId) {
+    const cfg = getConfig();
+    const sUrl = cfg.supabaseUrl || DEFAULT_SUPABASE_URL;
+    const sKey = cfg.supabaseKey || DEFAULT_SUPABASE_KEY;
+    if (!sUrl || !sKey || !batchId) return false;
+
+    const res = await fetch(`${sUrl}/rest/v1/production_batches?batch_id=eq.${encodeURIComponent(batchId)}`, {
+      method: 'DELETE',
+      headers: {
+        'apikey': sKey,
+        'Authorization': `Bearer ${sKey}`
+      }
+    });
+    return res.ok;
+  }
+
+  async function pushConfigAndMappingsToCloud() {
+    const cfg = getConfig();
+    const skuMappings = getSkuMappings();
+    const workerMappings = getWorkerMappings();
+    const payload = {
+      batch_id: 'QC_PAYROLL_CONFIG_V1',
+      batch_name: 'QueenCosy Payroll Shared Config & Mappings',
+      source: 'QC_PAYROLL_CONFIG',
+      status: 'COMPLETED',
+      total_skus: skuMappings.length,
+      total_units: workerMappings.length,
+      total_material_cost: 0,
+      items_json: {
+        updatedAt: new Date().toISOString(),
+        geminiApiKey: cfg.geminiApiKey || '',
+        geminiModel: cfg.geminiModel || DEFAULT_GEMINI_MODEL,
+        skuMappings,
+        workerMappings
+      },
+      updated_at: new Date().toISOString()
+    };
+    return cloudUpsertBatchRow(payload);
+  }
+
+  async function pushSheetToCloud(sheetObj) {
+    if (!sheetObj || !sheetObj.id) return false;
+    const payload = {
+      batch_id: `QC_PAYROLL_SHEET_${sheetObj.id}`,
+      batch_name: `${sheetObj.workerName || 'ช่าง'} (${sheetObj.sheetDate || ''}) [${sheetObj.payrollPeriodKey || ''}]`,
+      source: 'QC_PAYROLL_SHEET',
+      status: 'COMPLETED',
+      total_skus: (sheetObj.items || []).length,
+      total_units: Number(sheetObj.totalUnits) || 0,
+      total_material_cost: Number(sheetObj.totalWage) || 0,
+      items_json: {
+        ...sheetObj,
+        updatedAt: new Date().toISOString()
+      },
+      imported_by: sheetObj.workerCode || sheetObj.workerName || '',
+      notes: sheetObj.specialNote || '',
+      updated_at: new Date().toISOString()
+    };
+    return cloudUpsertBatchRow(payload);
+  }
+
+  async function deleteSheetFromCloud(sheetId) {
+    if (!sheetId) return false;
+    return cloudDeleteBatchRow(`QC_PAYROLL_SHEET_${sheetId}`);
+  }
+
+  // ===========================================================================
+  // SHARED CLOUD PROCESSING QUEUE (แอดมินถ่ายรูปในมือถือ -> ขึ้นจอคอมทันที)
+  // ===========================================================================
+  function getQueueItems() {
+    return memoryQueue;
+  }
+
+  async function upsertQueueItem(qItem, syncToCloud = true) {
+    if (!qItem || !qItem.id) return null;
+    if (!qItem.createdAt) qItem.createdAt = new Date().toISOString();
+    qItem.updatedAt = new Date().toISOString();
+
+    const idx = memoryQueue.findIndex(x => x.id === qItem.id);
+    if (idx >= 0) {
+      memoryQueue[idx] = { ...memoryQueue[idx], ...qItem };
+    } else {
+      memoryQueue.unshift(qItem);
+    }
+
+    if (syncToCloud) {
+      cloudUpsertBatchRow({
+        batch_id: `QC_PAYROLL_QUEUE_${qItem.id}`,
+        batch_name: qItem.name || `Queue ${qItem.id}`,
+        source: 'QC_PAYROLL_QUEUE',
+        status: 'COMPLETED',
+        total_skus: 1,
+        total_units: qItem.status === 'DONE' ? 1 : 0,
+        total_material_cost: 0,
+        items_json: qItem,
+        notes: qItem.status || 'PENDING',
+        updated_at: new Date().toISOString()
+      }).catch(e => console.warn('Queue cloud upsert warning:', e));
+    }
+    return qItem;
+  }
+
+  async function deleteQueueItem(qId, syncToCloud = true) {
+    memoryQueue = memoryQueue.filter(x => x.id !== qId);
+    if (syncToCloud && qId) {
+      cloudDeleteBatchRow(`QC_PAYROLL_QUEUE_${qId}`).catch(e => console.warn('Queue cloud delete warning:', e));
+    }
+  }
+
+  async function clearFinishedQueueItems() {
+    const doneItems = memoryQueue.filter(x => x.status === 'DONE');
+    memoryQueue = memoryQueue.filter(x => x.status !== 'DONE');
+    for (const item of doneItems) {
+      cloudDeleteBatchRow(`QC_PAYROLL_QUEUE_${item.id}`).catch(() => {});
+    }
+  }
+
+  // ===========================================================================
+  // SAVED JOB SHEETS STORAGE & PAYROLL AGGREGATION (LOCAL + CLOUD SYNCED)
   // ===========================================================================
   function getSavedSheets() {
+    if (Array.isArray(memorySheets)) {
+      return memorySheets;
+    }
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.SHEETS);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          memorySheets = parsed;
+          return memorySheets;
+        }
       }
     } catch (e) {}
-    return [];
+    memorySheets = [];
+    return memorySheets;
   }
 
   function saveSheets(sheets) {
     if (!Array.isArray(sheets)) return;
+    memorySheets = sheets;
     try {
-      localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(sheets));
-    } catch (quotaErr) {
-      // If localStorage hits 5MB due to many high-res photos, strip older base64 images while keeping all data
-      const slimmed = sheets.map((s, idx) => {
-        if (idx > 15 && s.imageDataUrl && s.imageDataUrl.startsWith('data:image')) {
+      // Keep full images in memorySheets & Supabase Cloud, but slim older images in localStorage so it never exceeds 5MB
+      const slimmedForLocal = sheets.map((s, idx) => {
+        if (idx >= 10 && s.imageDataUrl && s.imageDataUrl.startsWith('data:image')) {
           return { ...s, imageDataUrl: '' };
         }
         return s;
       });
-      localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(slimmed));
+      localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(slimmedForLocal));
+    } catch (quotaErr) {
+      try {
+        const metaOnly = sheets.map(s => ({
+          ...s,
+          imageDataUrl: (s.imageDataUrl && s.imageDataUrl.startsWith('data:image')) ? '' : s.imageDataUrl
+        }));
+        localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(metaOnly));
+      } catch (e) {}
     }
   }
 
-  function upsertSheet(sheetObj) {
+  function upsertSheet(sheetObj, skipCloudPush = false) {
     if (!sheetObj || !sheetObj.id) return;
     // Recalculate totals before saving
     const skuList = getSkuMappings();
@@ -1261,21 +1467,164 @@ ${workerContext}
 
     sheetObj.totalUnits = sheetTotalUnits;
     sheetObj.totalWage = sheetTotalWage;
+    sheetObj.updatedAt = new Date().toISOString();
 
     const all = getSavedSheets();
     const idx = all.findIndex(s => s.id === sheetObj.id);
     if (idx >= 0) {
+      if (!sheetObj.imageDataUrl && all[idx].imageDataUrl) {
+        sheetObj.imageDataUrl = all[idx].imageDataUrl;
+      }
       all[idx] = sheetObj;
     } else {
       all.unshift(sheetObj);
     }
     saveSheets(all);
+
+    if (!skipCloudPush) {
+      pushSheetToCloud(sheetObj).catch(e => console.warn('Cloud sheet push warning:', e));
+    }
     return sheetObj;
   }
 
-  function deleteSheet(sheetId) {
+  function deleteSheet(sheetId, skipCloudDelete = false) {
     const all = getSavedSheets().filter(s => s.id !== sheetId);
     saveSheets(all);
+    if (!skipCloudDelete) {
+      deleteSheetFromCloud(sheetId).catch(e => console.warn('Cloud sheet delete warning:', e));
+    }
+  }
+
+  // Pull & Merge all Config, Queue Photos, and Verified Job Sheets from Supabase Cloud
+  async function syncFromCloud(isBackground = false) {
+    if (isSyncingFromCloud) return { ok: false, busy: true };
+    isSyncingFromCloud = true;
+
+    const cfg = getConfig();
+    const sUrl = cfg.supabaseUrl || DEFAULT_SUPABASE_URL;
+    const sKey = cfg.supabaseKey || DEFAULT_SUPABASE_KEY;
+
+    try {
+      const url = `${sUrl}/rest/v1/production_batches?source=in.(QC_PAYROLL_CONFIG,QC_PAYROLL_SHEET,QC_PAYROLL_QUEUE)&order=created_at.desc&limit=1000`;
+      const res = await fetch(url, {
+        headers: {
+          'apikey': sKey,
+          'Authorization': `Bearer ${sKey}`
+        }
+      });
+      if (!res.ok) {
+        throw new Error(`Supabase HTTP ${res.status}`);
+      }
+      const rows = await res.json();
+      if (!Array.isArray(rows)) {
+        throw new Error('Invalid cloud response');
+      }
+
+      let cloudConfigRow = null;
+      const cloudSheets = [];
+      const cloudQueue = [];
+
+      rows.forEach(r => {
+        if (!r || !r.items_json) return;
+        const data = typeof r.items_json === 'string' ? JSON.parse(r.items_json) : r.items_json;
+        if (r.source === 'QC_PAYROLL_CONFIG' && r.batch_id === 'QC_PAYROLL_CONFIG_V1') {
+          cloudConfigRow = data;
+        } else if (r.source === 'QC_PAYROLL_SHEET' && data && data.id) {
+          cloudSheets.push(data);
+        } else if (r.source === 'QC_PAYROLL_QUEUE' && data && data.id) {
+          cloudQueue.push(data);
+        }
+      });
+
+      // 1. Sync Config & Mappings
+      if (cloudConfigRow) {
+        const localCfg = getConfig();
+        const updates = {};
+        if (cloudConfigRow.geminiApiKey && !localCfg.geminiApiKey) {
+          updates.geminiApiKey = cloudConfigRow.geminiApiKey;
+        } else if (cloudConfigRow.geminiApiKey && cloudConfigRow.geminiApiKey !== localCfg.geminiApiKey) {
+          updates.geminiApiKey = cloudConfigRow.geminiApiKey;
+        }
+        if (cloudConfigRow.geminiModel && !RETIRED_GEMINI_MODELS.has(cloudConfigRow.geminiModel)) {
+          updates.geminiModel = cloudConfigRow.geminiModel;
+        }
+        if (Object.keys(updates).length > 0) {
+          saveConfig(updates, true);
+        }
+        if (Array.isArray(cloudConfigRow.skuMappings) && cloudConfigRow.skuMappings.length > 0) {
+          saveSkuMappings(cloudConfigRow.skuMappings, true);
+        }
+        if (Array.isArray(cloudConfigRow.workerMappings) && cloudConfigRow.workerMappings.length > 0) {
+          saveWorkerMappings(cloudConfigRow.workerMappings, true);
+        }
+        // If local has an API key that cloud didn't have yet, push it up
+        if (localCfg.geminiApiKey && !cloudConfigRow.geminiApiKey) {
+          pushConfigAndMappingsToCloud().catch(() => {});
+        }
+      } else {
+        // First time initializing cloud config
+        pushConfigAndMappingsToCloud().catch(() => {});
+      }
+
+      // 2. Merge Sheets (Cloud + any unsynced Local sheets)
+      const currentLocalSheets = getSavedSheets();
+      const cloudSheetMap = new Map(cloudSheets.map(s => [s.id, s]));
+
+      // Push any local non-demo sheets that are missing in cloud
+      for (const loc of currentLocalSheets) {
+        if (loc && loc.id && !cloudSheetMap.has(loc.id) && !loc.isDemo) {
+          cloudSheetMap.set(loc.id, loc);
+          pushSheetToCloud(loc).catch(() => {});
+        }
+      }
+
+      const mergedSheets = Array.from(cloudSheetMap.values()).sort((a, b) => {
+        const tA = a.createdAt || a.sheetDate || '';
+        const tB = b.createdAt || b.sheetDate || '';
+        return tB.localeCompare(tA);
+      });
+      saveSheets(mergedSheets);
+
+      // 3. Merge Queue Items (Mobile photos waiting to be scanned or already scanned)
+      const cloudQueueMap = new Map(cloudQueue.map(q => [q.id, q]));
+      for (const locQ of memoryQueue) {
+        if (locQ && locQ.id && !cloudQueueMap.has(locQ.id)) {
+          // If local item is currently processing, keep it
+          if (locQ.status === 'PROCESSING') {
+            cloudQueueMap.set(locQ.id, locQ);
+          }
+        } else if (locQ && locQ.id && locQ.status === 'PROCESSING') {
+          cloudQueueMap.set(locQ.id, locQ);
+        }
+      }
+      memoryQueue = Array.from(cloudQueueMap.values()).sort((a, b) => {
+        const tA = a.createdAt || '';
+        const tB = b.createdAt || '';
+        return tB.localeCompare(tA);
+      });
+
+      lastCloudSyncTime = new Date();
+      notifyCloudSync({
+        ok: true,
+        isBackground,
+        sheetsCount: mergedSheets.length,
+        queueCount: memoryQueue.length,
+        syncedAt: lastCloudSyncTime
+      });
+
+      return {
+        ok: true,
+        sheetsCount: mergedSheets.length,
+        queueCount: memoryQueue.length,
+        syncedAt: lastCloudSyncTime
+      };
+    } catch (err) {
+      console.warn('Cloud sync warning:', err);
+      notifyCloudSync({ ok: false, error: err.message });
+      return { ok: false, error: err.message };
+    } finally {
+      isSyncingFromCloud = false;
+    }
   }
 
   // Generate 3 months (6 periods) of realistic demo data for testing Executive Charts
@@ -1326,7 +1675,6 @@ ${workerContext}
 
     datesToSeed.forEach((dObj, dIdx) => {
       demoWorkers.forEach((w, wIdx) => {
-        // Pick 3-5 items per sheet
         const items = [];
         let totalUnits = 0;
         let totalWage = 0;
@@ -1384,8 +1732,12 @@ ${workerContext}
   }
 
   function clearDemoSheets() {
+    const demoIds = getSavedSheets().filter(s => s.isDemo).map(s => s.id);
     const realOnly = getSavedSheets().filter(s => !s.isDemo);
     saveSheets(realOnly);
+    demoIds.forEach(id => {
+      deleteSheetFromCloud(id).catch(() => {});
+    });
     return realOnly.length;
   }
 
@@ -1419,6 +1771,9 @@ ${workerContext}
           }
           if (Array.isArray(data.sheets)) {
             saveSheets(data.sheets);
+            data.sheets.forEach(s => {
+              if (!s.isDemo) pushSheetToCloud(s).catch(() => {});
+            });
           }
           resolve({ sheetsCount: (data.sheets || []).length });
         } catch (err) {
@@ -1431,6 +1786,19 @@ ${workerContext}
   }
 
   initSupabase();
+
+  // Auto-sync when tab gains focus or every 7 seconds
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', () => syncFromCloud(true));
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') syncFromCloud(true);
+    });
+    setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        syncFromCloud(true);
+      }
+    }, 7000);
+  }
 
   return {
     getConfig,
@@ -1458,6 +1826,13 @@ ${workerContext}
     saveSheets,
     upsertSheet,
     deleteSheet,
+    getQueueItems,
+    upsertQueueItem,
+    deleteQueueItem,
+    clearFinishedQueueItems,
+    syncFromCloud,
+    onCloudSync,
+    getLastCloudSyncTime,
     seedDemoMultiMonthData,
     clearDemoSheets,
     exportHistoryBackupJson,
