@@ -46,12 +46,22 @@
     const cfg = PayrollDB.getConfig();
     const apiBadge = document.getElementById('badge-api-status');
     if (apiBadge) {
+      apiBadge.style.cursor = 'pointer';
+      apiBadge.onclick = () => {
+        const entered = prompt('🔑 ตั้งค่า Gemini API Key สำหรับเครื่องนี้ (วางคีย์แล้วกดตกลง):', cfg.geminiApiKey || '');
+        if (entered && entered.trim()) {
+          PayrollDB.saveConfig({ geminiApiKey: entered.trim() });
+          const inputKey = document.getElementById('input-gemini-api-key');
+          if (inputKey) inputKey.value = entered.trim();
+          updateHeaderBadges();
+        }
+      };
       if (cfg.geminiApiKey) {
-        apiBadge.className = 'px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300';
-        apiBadge.textContent = `🟢 Gemini AI พร้อมใช้งาน (${cfg.geminiModel || 'gemini-2.5-flash'})`;
+        apiBadge.className = 'px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 cursor-pointer';
+        apiBadge.textContent = `🟢 Gemini AI พร้อมใช้งาน (${cfg.geminiModel || 'gemini-flash-latest'})`;
       } else {
-        apiBadge.className = 'px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-amber-100 text-amber-800 border border-amber-300';
-        apiBadge.textContent = '🔑 รอตั้งค่า Gemini API Key';
+        apiBadge.className = 'px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-amber-100 text-amber-800 border border-amber-300 cursor-pointer';
+        apiBadge.textContent = '🔑 คลิกที่นี่เพื่อใส่ Gemini API Key';
       }
     }
 
@@ -115,12 +125,27 @@
     const resultBox = document.getElementById('box-api-check-result');
     const pill = document.getElementById('api-verify-pill');
 
-    if (inputKey) inputKey.value = cfg.geminiApiKey || '';
-    if (selectModel && cfg.geminiModel) selectModel.value = cfg.geminiModel;
+    if (inputKey) {
+      inputKey.value = cfg.geminiApiKey || '';
+      inputKey.addEventListener('input', () => {
+        const val = inputKey.value.trim();
+        if (val) {
+          PayrollDB.saveConfig({ geminiApiKey: val });
+          updateHeaderBadges();
+        }
+      });
+    }
+    if (selectModel) {
+      if (cfg.geminiModel) selectModel.value = cfg.geminiModel;
+      selectModel.addEventListener('change', () => {
+        PayrollDB.saveConfig({ geminiModel: selectModel.value });
+        updateHeaderBadges();
+      });
+    }
 
     if (cfg.geminiApiKey && pill) {
       pill.className = 'px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-500/30 text-emerald-200 border border-emerald-400/40';
-      pill.textContent = 'บันทึกคีย์แล้ว';
+      pill.textContent = '✅ พร้อมใช้งานทุกอุปกรณ์';
     }
 
     if (btnToggle && inputKey) {
@@ -745,7 +770,7 @@
           updateHeaderBadges();
 
           const autoScan = document.getElementById('chk-auto-ai-scan')?.checked;
-          if (autoScan && PayrollDB.getConfig().geminiApiKey) {
+          if (autoScan) {
             processQueueItem(item.id);
           }
         });
@@ -786,6 +811,16 @@
   async function processQueueItem(queueId) {
     const item = captureQueue.find(q => q.id === queueId);
     if (!item || item.status === 'PROCESSING') return;
+
+    if (!PayrollDB.getConfig().geminiApiKey) {
+      const entered = prompt('🔑 เครื่องนี้ยังไม่ได้ใส่ Gemini API Key\nกรุณาวาง Gemini API Key ของคุณที่นี่ (ใส่ครั้งเดียวระบบจะจำไว้ในเครื่องนี้ตลอดไป):');
+      if (entered && entered.trim()) {
+        PayrollDB.saveConfig({ geminiApiKey: entered.trim() });
+        const inputKey = document.getElementById('input-gemini-api-key');
+        if (inputKey) inputKey.value = entered.trim();
+        updateHeaderBadges();
+      }
+    }
 
     item.status = 'PROCESSING';
     item.errorMsg = '';
@@ -843,11 +878,11 @@
 
       return `
         <div class="bg-white p-2.5 rounded-xl border border-slate-200 flex items-center justify-between gap-2 shadow-sm">
-          <div class="flex items-center gap-2.5 min-w-0">
+          <div class="flex items-center gap-2.5 min-w-0 flex-1">
             <img src="${q.imageDataUrl}" class="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0">
-            <div class="min-w-0">
+            <div class="min-w-0 flex-1">
               <div class="font-bold text-slate-800 truncate">${escapeHtml(q.name)}</div>
-              <div class="text-[10px] text-rose-600 truncate">${escapeHtml(q.errorMsg || '')}</div>
+              ${q.errorMsg ? `<div class="text-[11px] text-rose-600 font-semibold break-words leading-snug mt-0.5">${escapeHtml(q.errorMsg)}</div>` : ''}
             </div>
           </div>
           <div class="flex items-center gap-1.5 shrink-0">

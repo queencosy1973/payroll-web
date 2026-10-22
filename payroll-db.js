@@ -17,6 +17,16 @@ const PayrollDB = (function () {
   const DEFAULT_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InllcmNtaWR5dmZldHZiYnJld2xmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2MTA4MzUsImV4cCI6MjEwNDE4NjgzNX0.7tGbXNoogdLh6UQOJBJe9MABmY7W5J1aixPLJSXGSGk';
   const DEFAULT_WAGE_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1gllvDgFUmXSGtGEkbw_COHJC18_fFD9-icubSpzVvbU/export?format=csv&gid=0';
   const DEFAULT_WORKER_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1GO6Xg2Nn0-rtk4YcrDaBmk3ncU-ANFpl4-EZJjwG5RM/export?format=csv&gid=0';
+  const DEFAULT_GEMINI_API_KEY = '';
+  const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest';
+  const RETIRED_GEMINI_MODELS = new Set([
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash-lite',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-1.5-pro'
+  ]);
 
   // Default 18 Master SKU Models with Upholstery (ค่าหุ้ม) & Sewing (ค่าเย็บ) wages + Initial Handwritten Aliases
   const DEFAULT_SKU_MAPPINGS = [
@@ -216,17 +226,19 @@ const PayrollDB = (function () {
   function getConfig() {
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEYS.CONFIG) || '{}');
+      const rawModel = saved.geminiModel || DEFAULT_GEMINI_MODEL;
+      const safeModel = RETIRED_GEMINI_MODELS.has(rawModel) ? DEFAULT_GEMINI_MODEL : rawModel;
       return {
-        geminiApiKey: saved.geminiApiKey || '',
-        geminiModel: saved.geminiModel || 'gemini-2.5-flash',
+        geminiApiKey: (saved.geminiApiKey && String(saved.geminiApiKey).trim()) || DEFAULT_GEMINI_API_KEY,
+        geminiModel: safeModel,
         supabaseUrl: saved.supabaseUrl || DEFAULT_SUPABASE_URL,
         supabaseKey: saved.supabaseKey || DEFAULT_SUPABASE_KEY,
         autoScanOnCapture: saved.autoScanOnCapture !== undefined ? saved.autoScanOnCapture : true
       };
     } catch (e) {
       return {
-        geminiApiKey: '',
-        geminiModel: 'gemini-2.5-flash',
+        geminiApiKey: DEFAULT_GEMINI_API_KEY,
+        geminiModel: DEFAULT_GEMINI_MODEL,
         supabaseUrl: DEFAULT_SUPABASE_URL,
         supabaseKey: DEFAULT_SUPABASE_KEY,
         autoScanOnCapture: true
@@ -855,7 +867,7 @@ const PayrollDB = (function () {
   // GEMINI API KEY VERIFICATION & AI VISION OCR ENGINE
   // ===========================================================================
   async function fetchAvailableGeminiModels(key) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=${encodeURIComponent(key)}`;
     const res = await fetch(url, {
       method: 'GET',
       headers: { 'x-goog-api-key': key }
@@ -876,26 +888,31 @@ const PayrollDB = (function () {
         !m.name.includes('imagen') &&
         !m.name.includes('veo') &&
         !m.name.includes('tts') &&
-        !m.name.includes('audio')
+        !m.name.includes('audio') &&
+        !m.name.includes('computer-use') &&
+        !m.name.includes('omni')
       )
-      .map(m => m.name.replace(/^models\//, ''));
+      .map(m => m.name.replace(/^models\//, ''))
+      .filter(name => !RETIRED_GEMINI_MODELS.has(name));
   }
 
   function pickBestGeminiModel(availableModels, preferredModel) {
+    const cleanPreferred = (preferredModel && !RETIRED_GEMINI_MODELS.has(preferredModel)) ? preferredModel : '';
     if (!Array.isArray(availableModels) || availableModels.length === 0) {
-      return preferredModel || 'gemini-2.5-flash';
+      return cleanPreferred || DEFAULT_GEMINI_MODEL;
     }
-    if (preferredModel && availableModels.includes(preferredModel)) {
-      return preferredModel;
+    if (cleanPreferred && availableModels.includes(cleanPreferred)) {
+      return cleanPreferred;
     }
     const priorityOrder = [
-      'gemini-2.5-flash',
       'gemini-flash-latest',
+      'gemini-3.8-flash',
       'gemini-3-flash-preview',
-      'gemini-2.5-flash-preview-09-2025',
-      'gemini-2.5-pro',
+      'gemini-3.7-flash',
+      'gemini-3.6-flash',
+      'gemini-3.5-flash',
       'gemini-pro-latest',
-      'gemini-2.5-flash-lite'
+      'gemini-3.1-pro-preview'
     ];
     for (const p of priorityOrder) {
       if (availableModels.includes(p)) return p;
@@ -904,8 +921,8 @@ const PayrollDB = (function () {
     return anyFlash || availableModels[0];
   }
 
-  async function verifyGeminiApiKey(apiKeyInput, preferredModel = 'gemini-2.5-flash') {
-    const key = String(apiKeyInput || getConfig().geminiApiKey || '').trim();
+  async function verifyGeminiApiKey(apiKeyInput, preferredModel = DEFAULT_GEMINI_MODEL) {
+    const key = String(apiKeyInput || getConfig().geminiApiKey || DEFAULT_GEMINI_API_KEY).trim();
     if (!key) {
       return { ok: false, message: 'กรุณากรอก Gemini API Key ก่อนกดตรวจสอบ' };
     }
@@ -913,45 +930,44 @@ const PayrollDB = (function () {
     try {
       // 1. Call ModelService.ListModels to validate the key and discover exact supported models
       const availableModels = await fetchAvailableGeminiModels(key);
-      const chosenModel = pickBestGeminiModel(availableModels, preferredModel);
+      const primaryChoice = pickBestGeminiModel(availableModels, preferredModel);
+      const candidatesToTest = [
+        primaryChoice,
+        'gemini-flash-latest',
+        'gemini-3.8-flash',
+        'gemini-3-flash-preview',
+        'gemini-3.5-flash',
+        'gemini-pro-latest'
+      ].filter((v, i, a) => v && !RETIRED_GEMINI_MODELS.has(v) && a.indexOf(v) === i);
 
-      // 2. Test generateContent WITHOUT restrictive maxOutputTokens (which breaks Gemini 2.5/3 thinking models)
-      const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/${chosenModel}:generateContent?key=${encodeURIComponent(key)}`;
-      const testRes = await fetch(testUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': key
-        },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: 'OK' }] }]
-        })
-      });
+      let lastErrMsg = '';
+      for (const candidateModel of candidatesToTest) {
+        const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent?key=${encodeURIComponent(key)}`;
+        const testRes = await fetch(testUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': key
+          },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: 'OK' }] }]
+          })
+        });
 
-      const testData = await testRes.json();
-      if (testRes.ok && testData && testData.candidates) {
-        saveConfig({ geminiApiKey: key, geminiModel: chosenModel, availableModels });
-        return {
-          ok: true,
-          model: chosenModel,
-          availableModels,
-          message: `เชื่อมต่อสำเร็จ! พร้อมอ่านใบงานด้วยโมเดล ${chosenModel}`
-        };
+        const testData = await testRes.json();
+        if (testRes.ok && testData && testData.candidates) {
+          saveConfig({ geminiApiKey: key, geminiModel: candidateModel, availableModels });
+          return {
+            ok: true,
+            model: candidateModel,
+            availableModels,
+            message: `เชื่อมต่อสำเร็จ! พร้อมอ่านใบงานด้วยโมเดล ${candidateModel}`
+          };
+        }
+        lastErrMsg = (testData && testData.error && testData.error.message) ? testData.error.message : `HTTP ${testRes.status}`;
       }
 
-      // If ListModels succeeded, the API key is valid even if one specific model had a quota/preview issue
-      if (availableModels.length > 0) {
-        saveConfig({ geminiApiKey: key, geminiModel: chosenModel, availableModels });
-        return {
-          ok: true,
-          model: chosenModel,
-          availableModels,
-          message: `ยืนยัน API Key สำเร็จ! (พบโมเดลที่รองรับ ${availableModels.length} รุ่น เลือกใช้: ${chosenModel})`
-        };
-      }
-
-      const errMsg = (testData && testData.error && testData.error.message) ? testData.error.message : `HTTP ${testRes.status}`;
-      return { ok: false, message: `ไม่สามารถเชื่อมต่อได้: ${errMsg}` };
+      return { ok: false, message: `ไม่สามารถเชื่อมต่อได้: ${lastErrMsg}` };
     } catch (err) {
       return {
         ok: false,
@@ -962,7 +978,7 @@ const PayrollDB = (function () {
 
   async function analyzeJobSheetWithGemini(imageDataUrl) {
     const cfg = getConfig();
-    const apiKey = (cfg.geminiApiKey || '').trim();
+    const apiKey = (cfg.geminiApiKey || DEFAULT_GEMINI_API_KEY || '').trim();
     if (!apiKey) {
       throw new Error('ยังไม่ได้ตั้งค่า Gemini API Key (กรุณาไปที่แท็บ "1. ตารางจับคู่ & ตั้งค่า Gemini API" เพื่อใส่ API Key)');
     }
@@ -1028,16 +1044,18 @@ ${workerContext}
   ]
 }`;
 
-    // Discover available models dynamically if needed
-    let candidateModels = [cfg.geminiModel || 'gemini-2.5-flash', 'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.5-pro'];
-    try {
-      const discovered = await fetchAvailableGeminiModels(apiKey);
-      if (discovered.length > 0) {
-        const best = pickBestGeminiModel(discovered, cfg.geminiModel);
-        candidateModels = [best, ...discovered];
-      }
-    } catch (e) {}
-    const modelsToTry = candidateModels.filter((v, i, a) => v && a.indexOf(v) === i);
+    // Build prioritized list of active Gemini Vision models (excluding retired 2.5 models)
+    const preferred = (!RETIRED_GEMINI_MODELS.has(cfg.geminiModel) && cfg.geminiModel) ? cfg.geminiModel : DEFAULT_GEMINI_MODEL;
+    let candidateModels = [
+      preferred,
+      'gemini-flash-latest',
+      'gemini-3.8-flash',
+      'gemini-3-flash-preview',
+      'gemini-3.7-flash',
+      'gemini-3.5-flash',
+      'gemini-pro-latest'
+    ];
+    const modelsToTry = candidateModels.filter((v, i, a) => v && !RETIRED_GEMINI_MODELS.has(v) && a.indexOf(v) === i);
 
     let lastErr = null;
 
@@ -1075,6 +1093,12 @@ ${workerContext}
         const jsonMatch = rawText.match(/\{[\s\S]*\}/);
         const cleanedJson = jsonMatch ? jsonMatch[0] : rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
         const parsed = JSON.parse(cleanedJson);
+
+        // Save working model so future calls go straight to the fastest working model
+        if (cfg.geminiModel !== modelName) {
+          saveConfig({ geminiModel: modelName });
+        }
+
         return normalizeParsedSheet(parsed, imageDataUrl);
       } catch (err) {
         lastErr = err;
@@ -1086,15 +1110,28 @@ ${workerContext}
 
   // Normalize AI output and enrich with our local SKU & Worker mapping dictionary
   function normalizeParsedSheet(aiData, imageDataUrl) {
-    const rawWorker = aiData.rawWorkerName || '';
+    const rawWorker = aiData.rawWorkerName || aiData.workerName || '';
     let workerMatch = matchWorkerFromText(rawWorker);
     if (!workerMatch.matched && aiData.matchedWorkerCode) {
       workerMatch = matchWorkerFromText(aiData.matchedWorkerCode);
     }
 
-    const isoDate = (aiData.isoDate && /^\d{4}-\d{2}-\d{2}$/.test(aiData.isoDate))
-      ? aiData.isoDate
-      : new Date().toISOString().slice(0, 10);
+    let isoDate = aiData.isoDate || '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate) && aiData.rawDate) {
+      // Parse D.M.YY (e.g. 15.6.69 -> 2026-06-15)
+      const dmY = String(aiData.rawDate).trim().match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+      if (dmY) {
+        const d = String(dmY[1]).padStart(2, '0');
+        const m = String(dmY[2]).padStart(2, '0');
+        let y = parseInt(dmY[3], 10);
+        if (y < 100) y = (y + 2500) - 543;
+        else if (y > 2400) y = y - 543;
+        isoDate = `${y}-${m}-${d}`;
+      }
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+      isoDate = new Date().toISOString().slice(0, 10);
+    }
 
     const basePeriod = calculatePayrollPeriod(isoDate);
     const isLate = Boolean(aiData.isLateCarryOver) || /รวมยอด|ล่าช้า/.test(aiData.specialNote || '');
@@ -1103,26 +1140,26 @@ ${workerContext}
     const dept = workerMatch.dept || 'หุ้ม';
 
     const items = (aiData.items || []).map((row, idx) => {
-      const rawModel = String(row.rawModel || '').trim();
+      const rawModel = String(row.rawModel || row.model || row.item || '').trim();
       let skuMatch = matchSkuFromText(rawModel);
       if (!skuMatch.matched && row.matchedSku) {
         skuMatch = matchSkuFromText(row.matchedSku);
       }
 
-      const qty = Math.max(1, parseInt(row.qty, 10) || 1);
+      const qty = Math.max(1, parseInt(row.qty || row.quantity || 1, 10) || 1);
       const unitRate = dept === 'เย็บ' ? skuMatch.sewingWage : skuMatch.upholsteryWage;
 
       return {
-        rowNo: row.rowNo || idx + 1,
+        rowNo: row.rowNo || row.no || row.itemNumber || idx + 1,
         rawModel,
         matchedSku: skuMatch.model || '',
         skuName: skuMatch.name || '',
         isMatched: skuMatch.matched,
         color: String(row.color || '').trim(),
         qty,
-        channel: String(row.channel || '').trim(),
-        foamBy: String(row.foamBy || '').trim(),
-        stockReceiver: String(row.stockReceiver || '').trim(),
+        channel: String(row.channel || row.workDistribution || '').trim(),
+        foamBy: String(row.foamBy || row.foamWithdrawn || '').trim(),
+        stockReceiver: String(row.stockReceiver || row.stockReceiptTime || row.stockInTime || '').trim(),
         unitRate,
         lineTotal: qty * unitRate
       };
