@@ -227,6 +227,23 @@ const PayrollDB = (function () {
   let cloudSyncListeners = [];
   let isSyncingFromCloud = false;
   let lastCloudSyncTime = null;
+  let lastLocalMappingEditMs = 0;
+  let mappingPushTimer = null;
+
+  function getLocalMappingsUpdatedAt() {
+    return localStorage.getItem('qc_payroll_mappings_updated_at_v1') || '';
+  }
+
+  function setLocalMappingsUpdatedAt(isoStr) {
+    localStorage.setItem('qc_payroll_mappings_updated_at_v1', isoStr);
+  }
+
+  function schedulePushConfigAndMappings() {
+    if (mappingPushTimer) clearTimeout(mappingPushTimer);
+    mappingPushTimer = setTimeout(() => {
+      pushConfigAndMappingsToCloud().catch(e => console.warn('Cloud config push warning:', e));
+    }, 500);
+  }
 
   function onCloudSync(cb) {
     if (typeof cb === 'function') cloudSyncListeners.push(cb);
@@ -327,7 +344,9 @@ const PayrollDB = (function () {
     if (!Array.isArray(list)) return;
     localStorage.setItem(STORAGE_KEYS.SKU_MAP, JSON.stringify(list));
     if (!skipCloudPush) {
-      pushConfigAndMappingsToCloud().catch(e => console.warn('Cloud SKU push warning:', e));
+      lastLocalMappingEditMs = Date.now();
+      setLocalMappingsUpdatedAt(new Date().toISOString());
+      schedulePushConfigAndMappings();
     }
   }
 
@@ -346,7 +365,9 @@ const PayrollDB = (function () {
     if (!Array.isArray(list)) return;
     localStorage.setItem(STORAGE_KEYS.WORKER_MAP, JSON.stringify(list));
     if (!skipCloudPush) {
-      pushConfigAndMappingsToCloud().catch(e => console.warn('Cloud worker push warning:', e));
+      lastLocalMappingEditMs = Date.now();
+      setLocalMappingsUpdatedAt(new Date().toISOString());
+      schedulePushConfigAndMappings();
     }
   }
 
@@ -1300,6 +1321,7 @@ ${workerContext}
     const cfg = getConfig();
     const skuMappings = getSkuMappings();
     const workerMappings = getWorkerMappings();
+    const nowIso = getLocalMappingsUpdatedAt() || new Date().toISOString();
     const payload = {
       batch_id: 'QC_PAYROLL_CONFIG_V1',
       batch_name: 'QueenCosy Payroll Shared Config & Mappings',
@@ -1309,7 +1331,8 @@ ${workerContext}
       total_units: workerMappings.length,
       total_material_cost: 0,
       items_json: {
-        updatedAt: new Date().toISOString(),
+        updatedAt: nowIso,
+        mappingsUpdatedAt: nowIso,
         geminiApiKey: cfg.geminiApiKey || '',
         geminiModel: cfg.geminiModel || DEFAULT_GEMINI_MODEL,
         skuMappings,
@@ -1536,7 +1559,8 @@ ${workerContext}
         }
       });
 
-      // 1. Sync Config & Mappings
+      // 1. Sync Config & Mappings (Respecting timestamp so local edits are never overwritten by older cloud data)
+      let mappingsChangedFromCloud = false;
       if (cloudConfigRow) {
         const localCfg = getConfig();
         const updates = {};
@@ -1551,12 +1575,35 @@ ${workerContext}
         if (Object.keys(updates).length > 0) {
           saveConfig(updates, true);
         }
-        if (Array.isArray(cloudConfigRow.skuMappings) && cloudConfigRow.skuMappings.length > 0) {
-          saveSkuMappings(cloudConfigRow.skuMappings, true);
+
+        const cloudMapTime = cloudConfigRow.mappingsUpdatedAt || cloudConfigRow.updatedAt || '';
+        const localMapTime = getLocalMappingsUpdatedAt();
+        const isEditingRecently = (Date.now() - lastLocalMappingEditMs) < 8000;
+
+        if (!isEditingRecently) {
+          if (cloudMapTime && (!localMapTime || cloudMapTime > localMapTime)) {
+            if (Array.isArray(cloudConfigRow.skuMappings) && cloudConfigRow.skuMappings.length > 0) {
+              const prevSkuJson = JSON.stringify(getSkuMappings());
+              const nextSkuJson = JSON.stringify(cloudConfigRow.skuMappings);
+              if (prevSkuJson !== nextSkuJson) {
+                saveSkuMappings(cloudConfigRow.skuMappings, true);
+                mappingsChangedFromCloud = true;
+              }
+            }
+            if (Array.isArray(cloudConfigRow.workerMappings) && cloudConfigRow.workerMappings.length > 0) {
+              const prevWJson = JSON.stringify(getWorkerMappings());
+              const nextWJson = JSON.stringify(cloudConfigRow.workerMappings);
+              if (prevWJson !== nextWJson) {
+                saveWorkerMappings(cloudConfigRow.workerMappings, true);
+                mappingsChangedFromCloud = true;
+              }
+            }
+            setLocalMappingsUpdatedAt(cloudMapTime);
+          } else if (localMapTime && (!cloudMapTime || localMapTime > cloudMapTime)) {
+            pushConfigAndMappingsToCloud().catch(() => {});
+          }
         }
-        if (Array.isArray(cloudConfigRow.workerMappings) && cloudConfigRow.workerMappings.length > 0) {
-          saveWorkerMappings(cloudConfigRow.workerMappings, true);
-        }
+
         // If local has an API key that cloud didn't have yet, push it up
         if (localCfg.geminiApiKey && !cloudConfigRow.geminiApiKey) {
           pushConfigAndMappingsToCloud().catch(() => {});
@@ -1607,6 +1654,7 @@ ${workerContext}
       notifyCloudSync({
         ok: true,
         isBackground,
+        mappingsChangedFromCloud,
         sheetsCount: mergedSheets.length,
         queueCount: memoryQueue.length,
         syncedAt: lastCloudSyncTime

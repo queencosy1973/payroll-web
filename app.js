@@ -82,10 +82,12 @@
       renderExecutiveDashboard();
       updateHeaderBadges();
 
-      // Refresh Mapping & Review tables unless the user is actively typing in an input inside them
-      if (!isTypingInInput || !meta.isBackground) {
+      // Refresh Mapping tables only on manual sync OR when Cloud actually brought newer mappings and user is not typing
+      if (!meta.isBackground || (meta.mappingsChangedFromCloud && !isTypingInInput)) {
         renderSkuMappingTable();
         renderWorkerMappingTable();
+      }
+      if (!isTypingInInput || !meta.isBackground) {
         renderReviewSelectorAndWorkspace();
       }
     });
@@ -479,6 +481,31 @@
       `;
     }).join('');
 
+    let skuSaveFeedbackTimer = null;
+    const triggerSkuAutoSave = () => {
+      saveSkuTableFromDOM();
+      const btnSaveSku = document.getElementById('btn-save-sku-table');
+      if (btnSaveSku) {
+        btnSaveSku.textContent = '✅ บันทึกอัตโนมัติแล้ว!';
+        if (skuSaveFeedbackTimer) clearTimeout(skuSaveFeedbackTimer);
+        skuSaveFeedbackTimer = setTimeout(() => {
+          btnSaveSku.textContent = '💾 บันทึกการแก้ไขตาราง';
+        }, 2000);
+      }
+    };
+
+    tbody.querySelectorAll('.sku-row-model, .sku-row-name, .sku-row-uph, .sku-row-sew, .sku-row-aliases').forEach(inp => {
+      inp.addEventListener('input', triggerSkuAutoSave);
+      inp.addEventListener('change', triggerSkuAutoSave);
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          triggerSkuAutoSave();
+          inp.blur();
+        }
+      });
+    });
+
     tbody.querySelectorAll('.btn-del-sku').forEach(btn => {
       btn.addEventListener('click', () => {
         const idx = parseInt(btn.getAttribute('data-idx'), 10);
@@ -552,6 +579,31 @@
         </tr>
       `;
     }).join('');
+
+    let workerSaveFeedbackTimer = null;
+    const triggerWorkerAutoSave = () => {
+      saveWorkerTableFromDOM();
+      const btnSaveWorker = document.getElementById('btn-save-worker-table');
+      if (btnSaveWorker) {
+        btnSaveWorker.textContent = '✅ บันทึกอัตโนมัติแล้ว!';
+        if (workerSaveFeedbackTimer) clearTimeout(workerSaveFeedbackTimer);
+        workerSaveFeedbackTimer = setTimeout(() => {
+          btnSaveWorker.textContent = '💾 บันทึกตารางช่าง';
+        }, 2000);
+      }
+    };
+
+    tbody.querySelectorAll('.worker-row-code, .worker-row-name, .worker-row-dept, .worker-row-aliases').forEach(inp => {
+      inp.addEventListener('input', triggerWorkerAutoSave);
+      inp.addEventListener('change', triggerWorkerAutoSave);
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          triggerWorkerAutoSave();
+          inp.blur();
+        }
+      });
+    });
 
     tbody.querySelectorAll('.btn-del-worker').forEach(btn => {
       btn.addEventListener('click', () => {
