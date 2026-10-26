@@ -233,6 +233,9 @@ const PayrollDB = (function () {
   const localSheetEditTimes = new Map();
   const pendingSheetPushTimers = new Map();
   const activeSheetPushPromises = new Set();
+  const memoryImageCache = new Map();
+  const uploadedImageIds = new Set();
+  const pendingImageFetchPromises = new Map();
 
   function getLocalMappingsUpdatedAt() {
     return localStorage.getItem('qc_payroll_mappings_updated_at_v1') || '';
@@ -1349,6 +1352,45 @@ ${workerContext}
 
   async function pushSheetToCloud(sheetObj) {
     if (!sheetObj || !sheetObj.id) return false;
+
+    const hasImg = Boolean(
+      (sheetObj.imageDataUrl && sheetObj.imageDataUrl.startsWith('data:image')) ||
+      sheetObj.hasCloudImage ||
+      memoryImageCache.has(sheetObj.id)
+    );
+
+    if (sheetObj.imageDataUrl && sheetObj.imageDataUrl.startsWith('data:image')) {
+      memoryImageCache.set(sheetObj.id, sheetObj.imageDataUrl);
+      if (!uploadedImageIds.has(sheetObj.id)) {
+        uploadedImageIds.add(sheetObj.id);
+        cloudUpsertBatchRow({
+          batch_id: `QC_PAYROLL_IMG_${sheetObj.id}`,
+          batch_name: `Image for ${sheetObj.id}`,
+          source: 'QC_PAYROLL_IMAGE',
+          status: 'COMPLETED',
+          total_skus: 1,
+          total_units: 1,
+          total_material_cost: 0,
+          items_json: {
+            id: sheetObj.id,
+            imageDataUrl: sheetObj.imageDataUrl
+          },
+          updated_at: new Date().toISOString()
+        }).catch(e => {
+          uploadedImageIds.delete(sheetObj.id);
+          console.warn('Cloud image upload warning:', e);
+        });
+      }
+    }
+
+    // Store lightweight metadata + items in QC_PAYROLL_SHEET (without 600KB base64 image string so sync is < 200ms)
+    const slimSheetForCloud = {
+      ...sheetObj,
+      imageDataUrl: '',
+      hasCloudImage: hasImg,
+      updatedAt: sheetObj.updatedAt || new Date().toISOString()
+    };
+
     const payload = {
       batch_id: `QC_PAYROLL_SHEET_${sheetObj.id}`,
       batch_name: `${sheetObj.workerName || 'ช่าง'} (${sheetObj.sheetDate || ''}) [${sheetObj.payrollPeriodKey || ''}]`,
@@ -1357,10 +1399,7 @@ ${workerContext}
       total_skus: (sheetObj.items || []).length,
       total_units: Number(sheetObj.totalUnits) || 0,
       total_material_cost: Number(sheetObj.totalWage) || 0,
-      items_json: {
-        ...sheetObj,
-        updatedAt: new Date().toISOString()
-      },
+      items_json: slimSheetForCloud,
       imported_by: sheetObj.workerCode || sheetObj.workerName || '',
       notes: sheetObj.specialNote || '',
       updated_at: new Date().toISOString()
@@ -1368,8 +1407,65 @@ ${workerContext}
     return cloudUpsertBatchRow(payload);
   }
 
+  async function fetchSheetImage(sheetId) {
+    if (!sheetId) return '';
+    if (memoryImageCache.has(sheetId)) {
+      return memoryImageCache.get(sheetId);
+    }
+    const existing = getSavedSheets().find(s => s.id === sheetId);
+    if (existing && existing.imageDataUrl && existing.imageDataUrl.startsWith('data:image')) {
+      memoryImageCache.set(sheetId, existing.imageDataUrl);
+      return existing.imageDataUrl;
+    }
+    if (pendingImageFetchPromises.has(sheetId)) {
+      return pendingImageFetchPromises.get(sheetId);
+    }
+
+    const cfg = getConfig();
+    const sUrl = cfg.supabaseUrl || DEFAULT_SUPABASE_URL;
+    const sKey = cfg.supabaseKey || DEFAULT_SUPABASE_KEY;
+
+    const promise = (async () => {
+      try {
+        const res = await fetch(
+          `${sUrl}/rest/v1/production_batches?batch_id=eq.${encodeURIComponent('QC_PAYROLL_IMG_' + sheetId)}&select=items_json`,
+          {
+            headers: {
+              'apikey': sKey,
+              'Authorization': `Bearer ${sKey}`
+            }
+          }
+        );
+        if (!res.ok) return '';
+        const rows = await res.json();
+        const row = rows && rows[0];
+        if (!row || !row.items_json) return '';
+        const data = typeof row.items_json === 'string' ? JSON.parse(row.items_json) : row.items_json;
+        const img = data?.imageDataUrl || '';
+        if (img) {
+          memoryImageCache.set(sheetId, img);
+          uploadedImageIds.add(sheetId);
+          const targetSheet = getSavedSheets().find(s => s.id === sheetId);
+          if (targetSheet) {
+            targetSheet.imageDataUrl = img;
+          }
+        }
+        return img;
+      } catch (e) {
+        console.warn('Fetch sheet image warning:', e);
+        return '';
+      } finally {
+        pendingImageFetchPromises.delete(sheetId);
+      }
+    })();
+
+    pendingImageFetchPromises.set(sheetId, promise);
+    return promise;
+  }
+
   async function deleteSheetFromCloud(sheetId) {
     if (!sheetId) return false;
+    cloudDeleteBatchRow(`QC_PAYROLL_IMG_${sheetId}`).catch(() => {});
     return cloudDeleteBatchRow(`QC_PAYROLL_SHEET_${sheetId}`);
   }
 
@@ -1393,18 +1489,23 @@ ${workerContext}
     }
 
     if (syncToCloud) {
-      cloudUpsertBatchRow({
-        batch_id: `QC_PAYROLL_QUEUE_${qItem.id}`,
-        batch_name: qItem.name || `Queue ${qItem.id}`,
-        source: 'QC_PAYROLL_QUEUE',
-        status: 'COMPLETED',
-        total_skus: 1,
-        total_units: qItem.status === 'DONE' ? 1 : 0,
-        total_material_cost: 0,
-        items_json: qItem,
-        notes: qItem.status || 'PENDING',
-        updated_at: new Date().toISOString()
-      }).catch(e => console.warn('Queue cloud upsert warning:', e));
+      if (qItem.status === 'DONE') {
+        // Once AI has scanned the queue item into a verified Sheet, remove the heavy queue row from Cloud
+        cloudDeleteBatchRow(`QC_PAYROLL_QUEUE_${qItem.id}`).catch(() => {});
+      } else {
+        cloudUpsertBatchRow({
+          batch_id: `QC_PAYROLL_QUEUE_${qItem.id}`,
+          batch_name: qItem.name || `Queue ${qItem.id}`,
+          source: 'QC_PAYROLL_QUEUE',
+          status: 'COMPLETED',
+          total_skus: 1,
+          total_units: 0,
+          total_material_cost: 0,
+          items_json: qItem,
+          notes: qItem.status || 'PENDING',
+          updated_at: new Date().toISOString()
+        }).catch(e => console.warn('Queue cloud upsert warning:', e));
+      }
     }
     return qItem;
   }
@@ -1545,7 +1646,7 @@ ${workerContext}
     const sKey = cfg.supabaseKey || DEFAULT_SUPABASE_KEY;
 
     try {
-      const url = `${sUrl}/rest/v1/production_batches?source=in.(QC_PAYROLL_CONFIG,QC_PAYROLL_SHEET,QC_PAYROLL_QUEUE)&order=created_at.desc&limit=1000`;
+      const url = `${sUrl}/rest/v1/production_batches?source=in.(QC_PAYROLL_CONFIG,QC_PAYROLL_SHEET,QC_PAYROLL_QUEUE)&select=batch_id,source,items_json,updated_at,created_at&limit=1000`;
       const res = await fetch(url, {
         headers: {
           'apikey': sKey,
@@ -1570,6 +1671,9 @@ ${workerContext}
         if (r.source === 'QC_PAYROLL_CONFIG' && r.batch_id === 'QC_PAYROLL_CONFIG_V1') {
           cloudConfigRow = data;
         } else if (r.source === 'QC_PAYROLL_SHEET' && data && data.id) {
+          if (!data.imageDataUrl && memoryImageCache.has(data.id)) {
+            data.imageDataUrl = memoryImageCache.get(data.id);
+          }
           cloudSheets.push(data);
         } else if (r.source === 'QC_PAYROLL_QUEUE' && data && data.id) {
           cloudQueue.push(data);
@@ -1924,6 +2028,7 @@ ${workerContext}
     saveSheets,
     upsertSheet,
     deleteSheet,
+    fetchSheetImage,
     getQueueItems,
     upsertQueueItem,
     deleteQueueItem,

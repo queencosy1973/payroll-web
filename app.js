@@ -1103,7 +1103,11 @@
     if (btnRescan) {
       btnRescan.addEventListener('click', async () => {
         const sheet = getActiveSheet();
-        if (!sheet || !sheet.imageDataUrl) {
+        if (!sheet) return;
+        if (!sheet.imageDataUrl && typeof PayrollDB.fetchSheetImage === 'function') {
+          await PayrollDB.fetchSheetImage(sheet.id);
+        }
+        if (!sheet.imageDataUrl) {
           alert('ใบงานนี้ไม่มีรูปภาพต้นฉบับสำหรับสแกนใหม่');
           return;
         }
@@ -1291,10 +1295,23 @@
       }).join('');
     }
 
-    // Image
+    // Image (Lazy-loaded on demand from QC_PAYROLL_IMAGE so main sync is 400x faster)
     const imgEl = document.getElementById('review-sheet-image');
     if (imgEl) {
-      imgEl.src = sheet.imageDataUrl || 'sample_jobsheet.jpg';
+      if (sheet.imageDataUrl) {
+        imgEl.src = sheet.imageDataUrl;
+      } else if (typeof PayrollDB.fetchSheetImage === 'function' && !sheet.isDemo) {
+        const loadingSheetId = sheet.id;
+        PayrollDB.fetchSheetImage(loadingSheetId).then(dataUrl => {
+          if (dataUrl && getActiveSheet()?.id === loadingSheetId) {
+            imgEl.src = dataUrl;
+          } else if (!dataUrl && getActiveSheet()?.id === loadingSheetId) {
+            imgEl.src = 'sample_jobsheet.jpg';
+          }
+        });
+      } else {
+        imgEl.src = 'sample_jobsheet.jpg';
+      }
     }
 
     // Header fields
