@@ -87,7 +87,7 @@
         renderSkuMappingTable();
         renderWorkerMappingTable();
       }
-      if (!isTypingInInput || !meta.isBackground) {
+      if ((!isTypingInInput && !activeSkuSearchState) || !meta.isBackground) {
         renderReviewSelectorAndWorkspace();
       }
     });
@@ -1354,14 +1354,16 @@
     const tbody = document.getElementById('tbody-review-items');
     const skuList = PayrollDB.getSkuMappings();
     if (tbody) {
+      const formatSkuDisplay = (skuCode) => {
+        if (!skuCode) return '';
+        const found = skuList.find(s => s.model.toLowerCase() === String(skuCode).toLowerCase());
+        if (!found) return String(skuCode).toUpperCase();
+        const rate = sheet.workerDept === 'เย็บ' ? found.sewingWage : found.upholsteryWage;
+        return `${found.model.toUpperCase()} - ${found.name} (${rate}฿)`;
+      };
+
       tbody.innerHTML = (sheet.items || []).map((item, idx) => {
-        const skuOptions = [
-          `<option value="">-- เลือก SKU --</option>`,
-          ...skuList.map(s => {
-            const rate = sheet.workerDept === 'เย็บ' ? s.sewingWage : s.upholsteryWage;
-            return `<option value="${escapeHtml(s.model)}" ${s.model.toLowerCase() === String(item.matchedSku || '').toLowerCase() ? 'selected' : ''}>${s.model.toUpperCase()} - ${escapeHtml(s.name.slice(0, 26))} (${rate}฿)</option>`;
-          })
-        ].join('');
+        const currentSkuLabel = formatSkuDisplay(item.matchedSku);
 
         return `
           <tr class="${item.matchedSku ? 'hover:bg-slate-50' : 'bg-amber-50'}" data-item-idx="${idx}">
@@ -1369,13 +1371,22 @@
             <td class="py-1.5 px-2">
               <div class="flex items-center gap-1">
                 <input type="text" class="rev-item-raw w-full px-2 py-1 font-mono font-bold text-slate-900 bg-slate-100 border border-slate-300 rounded-lg text-xs" value="${escapeHtml(item.rawModel || '')}">
-                <button type="button" class="btn-learn-item-sku px-1.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded text-[10px] font-bold shrink-0" data-idx="${idx}" title="จำคำในใบงานนี้ให้ตรงกับ SKU ที่เลือก">📌จำ</button>
+                <button type="button" class="btn-learn-item-sku px-1.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded text-[10px] font-bold shrink-0 cursor-pointer" data-idx="${idx}" title="จำคำในใบงานนี้ให้ตรงกับ SKU ที่เลือก">📌จำ</button>
               </div>
             </td>
             <td class="py-1.5 px-2">
-              <select class="rev-item-sku w-full px-2 py-1 font-bold rounded-lg border text-xs ${item.matchedSku ? 'border-emerald-300 bg-emerald-50/40 text-emerald-950' : 'border-amber-400 bg-amber-100 text-amber-950'}">
-                ${skuOptions}
-              </select>
+              <div class="relative flex items-center">
+                <input type="hidden" class="rev-item-sku" value="${escapeHtml(item.matchedSku || '')}">
+                <input
+                  type="text"
+                  class="rev-item-sku-search w-full pl-2 pr-6 py-1 font-bold rounded-lg border text-xs cursor-pointer focus:cursor-text focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition ${item.matchedSku ? 'border-emerald-300 bg-emerald-50/40 text-emerald-950' : 'border-amber-400 bg-amber-100 text-amber-950'}"
+                  value="${escapeHtml(currentSkuLabel)}"
+                  placeholder="🔍 พิมพ์ค้นหา SKU / ชื่อรุ่น..."
+                  autocomplete="off"
+                  data-idx="${idx}"
+                >
+                <span class="rev-item-sku-toggle absolute right-1.5 text-[10px] text-slate-500 hover:text-indigo-700 cursor-pointer select-none px-1" data-idx="${idx}" title="คลิกเพื่อเปิดรายการ / พิมพ์ค้นหาคีย์เวิร์ด">▾</span>
+              </div>
             </td>
             <td class="py-1.5 px-2">
               <input type="text" class="rev-item-color w-full px-2 py-1 font-mono text-slate-800 border border-slate-200 rounded-lg text-xs" value="${escapeHtml(item.color || '')}">
@@ -1392,14 +1403,17 @@
             <td class="py-1.5 px-2 text-right font-mono font-bold text-slate-700">${(item.unitRate || 0).toLocaleString()}</td>
             <td class="py-1.5 px-2 text-right font-mono font-black text-emerald-700">${(item.lineTotal || 0).toLocaleString()}</td>
             <td class="py-1.5 px-1 text-center">
-              <button type="button" class="btn-del-rev-item text-rose-500 hover:text-rose-700 font-bold" data-idx="${idx}">✕</button>
+              <button type="button" class="btn-del-rev-item text-rose-500 hover:text-rose-700 font-bold cursor-pointer" data-idx="${idx}">✕</button>
             </td>
           </tr>
         `;
       }).join('');
 
-      // Live recalculate when SKU or Qty changes
-      tbody.querySelectorAll('.rev-item-sku, .rev-item-qty').forEach(el => {
+      // Attach searchable SKU combobox portal events
+      bindSearchableSkuComboboxes(tbody, sheet, skuList, formatSkuDisplay);
+
+      // Live recalculate when SKU, Qty or other row fields change
+      tbody.querySelectorAll('.rev-item-sku, .rev-item-qty, .rev-item-raw, .rev-item-color, .rev-item-channel, .rev-item-stock').forEach(el => {
         el.addEventListener('change', () => {
           syncReviewTableToSheetObject(sheet);
           PayrollDB.upsertSheet(sheet);
@@ -1407,7 +1421,7 @@
         });
       });
 
-      // Learn SKU alias button
+      // Learn SKU alias button (also applies SKU to any other rows in this sheet with the same rawModel)
       tbody.querySelectorAll('.btn-learn-item-sku').forEach(btn => {
         btn.addEventListener('click', () => {
           syncReviewTableToSheetObject(sheet);
@@ -1417,9 +1431,19 @@
             alert('กรุณาพิมพ์คำในใบงานและเลือกรหัส SKU โรงงานก่อนกดจำ');
             return;
           }
+          const normRaw = targetItem.rawModel.trim().toLowerCase();
+          let updatedRowsCount = 0;
+          sheet.items.forEach(it => {
+            if ((it.rawModel || '').trim().toLowerCase() === normRaw) {
+              it.matchedSku = targetItem.matchedSku;
+              updatedRowsCount++;
+            }
+          });
           PayrollDB.learnSkuAlias(targetItem.rawModel, targetItem.matchedSku);
+          PayrollDB.upsertSheet(sheet);
           renderSkuMappingTable();
-          alert(`📌 จำคำว่า "${targetItem.rawModel}" ➔ SKU "${targetItem.matchedSku.toUpperCase()}" เข้าตารางจับคู่เรียบร้อยแล้ว!`);
+          renderReviewSelectorAndWorkspace();
+          alert(`📌 จำคำว่า "${targetItem.rawModel}" ➔ SKU "${targetItem.matchedSku.toUpperCase()}" เข้าตารางจับคู่ และอัปเดตในใบงานนี้ (${updatedRowsCount} แถว) เรียบร้อยแล้ว!`);
         });
       });
 
@@ -1440,6 +1464,310 @@
     const totalWageEl = document.getElementById('review-total-wage');
     if (totalUnitsEl) totalUnitsEl.textContent = String(sheet.totalUnits || 0);
     if (totalWageEl) totalWageEl.textContent = (sheet.totalWage || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 });
+  }
+
+  // ===========================================================================
+  // SEARCHABLE SKU COMBOBOX PORTAL FOR TAB 3
+  // ===========================================================================
+  let skuPortalEl = null;
+  let activeSkuSearchState = null;
+
+  function ensureSkuSearchPortal() {
+    if (skuPortalEl) return skuPortalEl;
+    skuPortalEl = document.createElement('div');
+    skuPortalEl.id = 'sku-search-portal';
+    skuPortalEl.className = 'fixed z-[9999] bg-white border-2 border-indigo-600 rounded-xl shadow-2xl overflow-hidden hidden flex-col text-xs';
+    skuPortalEl.style.width = '360px';
+    skuPortalEl.style.maxHeight = '320px';
+    document.body.appendChild(skuPortalEl);
+
+    // Close portal when clicking outside
+    document.addEventListener('mousedown', (e) => {
+      if (!skuPortalEl || skuPortalEl.classList.contains('hidden')) return;
+      if (skuPortalEl.contains(e.target)) return;
+      if (activeSkuSearchState && activeSkuSearchState.inputEl && activeSkuSearchState.inputEl.parentElement.contains(e.target)) return;
+      closeSkuSearchPortal(true);
+    });
+
+    // Reposition portal on window resize or scroll (except scrolling inside the portal itself)
+    window.addEventListener('scroll', (e) => {
+      if (!skuPortalEl || skuPortalEl.classList.contains('hidden')) return;
+      if (skuPortalEl.contains(e.target)) return;
+      positionSkuSearchPortal();
+    }, true);
+
+    window.addEventListener('resize', () => {
+      if (!skuPortalEl || skuPortalEl.classList.contains('hidden')) return;
+      positionSkuSearchPortal();
+    });
+
+    return skuPortalEl;
+  }
+
+  function positionSkuSearchPortal() {
+    if (!skuPortalEl || !activeSkuSearchState || !activeSkuSearchState.inputEl) return;
+    const rect = activeSkuSearchState.inputEl.getBoundingClientRect();
+    const portalWidth = Math.max(350, rect.width);
+    skuPortalEl.style.width = `${portalWidth}px`;
+
+    const viewportH = window.innerHeight;
+    const viewportW = window.innerWidth;
+    const spaceBelow = viewportH - rect.bottom;
+    const desiredHeight = 310;
+
+    let left = rect.left;
+    if (left + portalWidth > viewportW - 12) {
+      left = Math.max(12, viewportW - portalWidth - 12);
+    }
+    skuPortalEl.style.left = `${left}px`;
+
+    if (spaceBelow < 220 && rect.top > 240) {
+      // Open upward
+      skuPortalEl.style.top = 'auto';
+      skuPortalEl.style.bottom = `${viewportH - rect.top + 4}px`;
+      skuPortalEl.style.maxHeight = `${Math.min(desiredHeight, rect.top - 16)}px`;
+    } else {
+      // Open downward
+      skuPortalEl.style.bottom = 'auto';
+      skuPortalEl.style.top = `${rect.bottom + 4}px`;
+      skuPortalEl.style.maxHeight = `${Math.min(desiredHeight, Math.max(180, spaceBelow - 16))}px`;
+    }
+  }
+
+  function closeSkuSearchPortal(restoreLabel = true) {
+    if (restoreLabel && activeSkuSearchState) {
+      const { inputEl, hiddenEl, formatSkuDisplay } = activeSkuSearchState;
+      if (inputEl && hiddenEl && formatSkuDisplay) {
+        inputEl.value = formatSkuDisplay(hiddenEl.value);
+      }
+    }
+    if (skuPortalEl) {
+      skuPortalEl.classList.add('hidden');
+      skuPortalEl.classList.remove('flex');
+    }
+    activeSkuSearchState = null;
+  }
+
+  function bindSearchableSkuComboboxes(tbody, sheet, skuList, formatSkuDisplay) {
+    ensureSkuSearchPortal();
+
+    const filterSkusByKeyword = (query) => {
+      const q = (query || '').trim().toLowerCase();
+      if (!q) return skuList;
+      const tokens = q.split(/\s+/).filter(Boolean);
+      const filtered = skuList.filter(s => {
+        const rate = sheet.workerDept === 'เย็บ' ? s.sewingWage : s.upholsteryWage;
+        const haystack = `${s.model} ${s.name} ${(s.aliases || []).join(' ')} ${rate}`.toLowerCase();
+        return tokens.every(tok => haystack.includes(tok));
+      });
+      // Sort exact/prefix SKU code matches first
+      return filtered.slice().sort((a, b) => {
+        const am = a.model.toLowerCase();
+        const bm = b.model.toLowerCase();
+        if (am === q && bm !== q) return -1;
+        if (bm === q && am !== q) return 1;
+        if (am.startsWith(q) && !bm.startsWith(q)) return -1;
+        if (bm.startsWith(q) && !am.startsWith(q)) return 1;
+        return 0;
+      });
+    };
+
+    const renderPortalList = () => {
+      if (!skuPortalEl || !activeSkuSearchState) return;
+      const { query, filtered, highlightIdx, hiddenEl } = activeSkuSearchState;
+      const currentVal = (hiddenEl?.value || '').toLowerCase();
+
+      const headerHtml = `
+        <div class="px-3 py-1.5 bg-indigo-950 text-white flex items-center justify-between text-[11px] font-bold shrink-0">
+          <span>🔍 พิมพ์ค้นหารหัส SKU / ชื่อรุ่น / คำย่อ / ราคา</span>
+          <span class="px-1.5 py-0.5 rounded bg-indigo-800 text-cyan-300 font-mono text-[10px]">พบ ${filtered.length} รุ่น</span>
+        </div>
+      `;
+
+      const clearOptionHtml = `
+        <div data-sku-value="" class="sku-portal-option px-3 py-1.5 border-b border-slate-100 text-slate-500 hover:bg-rose-50 hover:text-rose-700 cursor-pointer flex items-center justify-between text-[11px] font-bold">
+          <span>-- ล้างค่า / ไม่ระบุ SKU --</span>
+          <span class="text-[10px]">✕</span>
+        </div>
+      `;
+
+      const itemsHtml = filtered.length === 0
+        ? `<div class="p-4 text-center text-slate-500 font-bold">ไม่พบรุ่นที่ตรงกับคีย์เวิร์ด "${escapeHtml(query)}"</div>`
+        : filtered.map((s, i) => {
+            const rate = sheet.workerDept === 'เย็บ' ? s.sewingWage : s.upholsteryWage;
+            const isSelected = s.model.toLowerCase() === currentVal;
+            const isHighlighted = i === highlightIdx;
+            const aliasPreview = (s.aliases || []).filter(a => a.toLowerCase() !== s.model.toLowerCase()).slice(0, 4).join(', ');
+            return `
+              <div
+                data-sku-value="${escapeHtml(s.model)}"
+                data-opt-idx="${i}"
+                class="sku-portal-option px-3 py-2 border-b border-slate-100 cursor-pointer flex items-center justify-between gap-2 transition ${
+                  isHighlighted
+                    ? 'bg-indigo-600 text-white'
+                    : isSelected
+                    ? 'bg-emerald-50 text-emerald-950 font-black'
+                    : 'hover:bg-indigo-50 text-slate-800'
+                }"
+              >
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="px-1.5 py-0.5 rounded font-mono font-black text-[11px] ${
+                      isHighlighted ? 'bg-white text-indigo-700' : 'bg-indigo-100 text-indigo-800'
+                    }">${escapeHtml(s.model.toUpperCase())}</span>
+                    <span class="font-bold truncate">${escapeHtml(s.name)}</span>
+                  </div>
+                  ${aliasPreview ? `<div class="text-[10px] truncate mt-0.5 ${isHighlighted ? 'text-indigo-100' : 'text-slate-400'}">คำในใบงาน: ${escapeHtml(aliasPreview)}</div>` : ''}
+                </div>
+                <span class="px-2 py-0.5 rounded-full font-mono font-black text-[11px] shrink-0 ${
+                  isHighlighted
+                    ? 'bg-amber-300 text-slate-950'
+                    : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                }">${rate}฿</span>
+              </div>
+            `;
+          }).join('');
+
+      skuPortalEl.innerHTML = `
+        ${headerHtml}
+        <div id="sku-portal-scroll" class="overflow-y-auto flex-1 divide-y divide-slate-50">
+          ${clearOptionHtml}
+          ${itemsHtml}
+        </div>
+      `;
+
+      // Bind mousedown on options so selection triggers before input blur
+      skuPortalEl.querySelectorAll('.sku-portal-option').forEach(optEl => {
+        optEl.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const chosenSku = optEl.getAttribute('data-sku-value') || '';
+          commitSkuSelection(chosenSku);
+        });
+      });
+
+      // Scroll highlighted item into view
+      const scrollBox = skuPortalEl.querySelector('#sku-portal-scroll');
+      const hiEl = skuPortalEl.querySelector(`[data-opt-idx="${highlightIdx}"]`);
+      if (scrollBox && hiEl) {
+        const hiTop = hiEl.offsetTop;
+        const hiBottom = hiTop + hiEl.offsetHeight;
+        if (hiTop < scrollBox.scrollTop) {
+          scrollBox.scrollTop = Math.max(0, hiTop - 28);
+        } else if (hiBottom > scrollBox.scrollTop + scrollBox.clientHeight) {
+          scrollBox.scrollTop = hiBottom - scrollBox.clientHeight + 12;
+        }
+      }
+    };
+
+    const commitSkuSelection = (chosenSku) => {
+      if (!activeSkuSearchState) return;
+      const { hiddenEl, inputEl } = activeSkuSearchState;
+      hiddenEl.value = chosenSku;
+      inputEl.value = formatSkuDisplay(chosenSku);
+      closeSkuSearchPortal(false);
+      syncReviewTableToSheetObject(sheet);
+      PayrollDB.upsertSheet(sheet);
+      renderReviewSelectorAndWorkspace();
+    };
+
+    const openForInput = (inputEl, initialQuery = '') => {
+      const tr = inputEl.closest('tr[data-item-idx]');
+      const hiddenEl = tr?.querySelector('.rev-item-sku');
+      if (!tr || !hiddenEl) return;
+
+      const filtered = filterSkusByKeyword(initialQuery);
+      const currentVal = (hiddenEl.value || '').toLowerCase();
+      let highlightIdx = filtered.findIndex(s => s.model.toLowerCase() === currentVal);
+      if (highlightIdx < 0) highlightIdx = 0;
+
+      activeSkuSearchState = {
+        inputEl,
+        hiddenEl,
+        formatSkuDisplay,
+        query: initialQuery,
+        filtered,
+        highlightIdx
+      };
+
+      skuPortalEl.classList.remove('hidden');
+      skuPortalEl.classList.add('flex');
+      positionSkuSearchPortal();
+      renderPortalList();
+    };
+
+    tbody.querySelectorAll('.rev-item-sku-search').forEach(inputEl => {
+      inputEl.addEventListener('focus', () => {
+        openForInput(inputEl, '');
+        setTimeout(() => {
+          if (document.activeElement === inputEl) inputEl.select();
+        }, 10);
+      });
+
+      inputEl.addEventListener('click', () => {
+        if (!activeSkuSearchState || activeSkuSearchState.inputEl !== inputEl) {
+          openForInput(inputEl, '');
+        }
+      });
+
+      inputEl.addEventListener('input', () => {
+        const q = inputEl.value;
+        const filtered = filterSkusByKeyword(q);
+        if (!activeSkuSearchState || activeSkuSearchState.inputEl !== inputEl) {
+          openForInput(inputEl, q);
+        } else {
+          activeSkuSearchState.query = q;
+          activeSkuSearchState.filtered = filtered;
+          activeSkuSearchState.highlightIdx = 0;
+          positionSkuSearchPortal();
+          renderPortalList();
+        }
+      });
+
+      inputEl.addEventListener('keydown', (e) => {
+        if (!activeSkuSearchState || activeSkuSearchState.inputEl !== inputEl) return;
+        const len = activeSkuSearchState.filtered.length;
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          if (len > 0) {
+            activeSkuSearchState.highlightIdx = (activeSkuSearchState.highlightIdx + 1) % len;
+            renderPortalList();
+          }
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (len > 0) {
+            activeSkuSearchState.highlightIdx = (activeSkuSearchState.highlightIdx - 1 + len) % len;
+            renderPortalList();
+          }
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          if (len > 0) {
+            const picked = activeSkuSearchState.filtered[activeSkuSearchState.highlightIdx] || activeSkuSearchState.filtered[0];
+            if (picked) commitSkuSelection(picked.model);
+          }
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          closeSkuSearchPortal(true);
+          inputEl.blur();
+        }
+      });
+    });
+
+    tbody.querySelectorAll('.rev-item-sku-toggle').forEach(toggleEl => {
+      toggleEl.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const tr = toggleEl.closest('tr[data-item-idx]');
+        const inputEl = tr?.querySelector('.rev-item-sku-search');
+        if (!inputEl) return;
+        if (activeSkuSearchState && activeSkuSearchState.inputEl === inputEl && !skuPortalEl.classList.contains('hidden')) {
+          closeSkuSearchPortal(true);
+        } else {
+          inputEl.focus();
+          openForInput(inputEl, '');
+          setTimeout(() => inputEl.select(), 10);
+        }
+      });
+    });
   }
 
   function syncReviewTableToSheetObject(sheet) {
