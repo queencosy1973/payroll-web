@@ -1128,7 +1128,7 @@
           await PayrollDB.fetchSheetImage(sheet.id);
         }
         if (!sheet.imageDataUrl) {
-          alert('ใบงานนี้ไม่มีรูปภาพต้นฉบับสำหรับสแกนใหม่');
+          alert('ใบงานนี้ยังไม่มีรูปภาพต้นฉบับ กรุณากดปุ่ม "📷 แนบ/เปลี่ยนรูปใบงานนี้" ด้านซ้ายมือก่อนครับ');
           return;
         }
         btnRescan.disabled = true;
@@ -1144,6 +1144,35 @@
           btnRescan.disabled = false;
           btnRescan.textContent = '🔄 ให้ AI อ่านใบนี้ใหม่';
         }
+      });
+    }
+
+    const inputAttachPhoto = document.getElementById('input-attach-sheet-photo');
+    if (inputAttachPhoto) {
+      inputAttachPhoto.addEventListener('change', (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const sheet = getActiveSheet();
+        if (!sheet) {
+          inputAttachPhoto.value = '';
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+          try {
+            const resizedUrl = await resizeImageDataUrl(ev.target.result, 1050, 0.68);
+            syncReviewTableToSheetObject(sheet);
+            sheet.imageDataUrl = resizedUrl;
+            sheet.hasCloudImage = true;
+            PayrollDB.upsertSheet(sheet);
+            renderReviewSelectorAndWorkspace();
+          } catch (err) {
+            console.warn('Attach sheet photo error:', err);
+          } finally {
+            inputAttachPhoto.value = '';
+          }
+        };
+        reader.readAsDataURL(file);
       });
     }
 
@@ -1315,22 +1344,44 @@
       }).join('');
     }
 
-    // Image (Lazy-loaded on demand from QC_PAYROLL_IMAGE so main sync is 400x faster)
+    // Image (Lazy-loaded on demand from IndexedDB / QC_PAYROLL_IMAGE; NEVER fallback to sample Blai Morn photo for real sheets!)
     const imgEl = document.getElementById('review-sheet-image');
+    const missingBox = document.getElementById('review-missing-image-box');
+    const missingTitle = document.getElementById('review-missing-image-title');
+
+    const applySheetImageState = (dataUrl, sheetObj) => {
+      if (!imgEl) return;
+      if (dataUrl) {
+        imgEl.src = dataUrl;
+        imgEl.classList.remove('hidden');
+        if (missingBox) missingBox.classList.add('hidden');
+      } else if (sheetObj && sheetObj.isDemo) {
+        imgEl.src = 'sample_jobsheet.jpg';
+        imgEl.classList.remove('hidden');
+        if (missingBox) missingBox.classList.add('hidden');
+      } else {
+        imgEl.removeAttribute('src');
+        imgEl.classList.add('hidden');
+        if (missingTitle && sheetObj) {
+          missingTitle.textContent = `ข้อมูลตารางของช่าง "${sheetObj.workerName || '-'}" (${sheetObj.sheetDate || '-'}) ครบถ้วน 100%`;
+        }
+        if (missingBox) missingBox.classList.remove('hidden');
+      }
+    };
+
     if (imgEl) {
       if (sheet.imageDataUrl) {
-        imgEl.src = sheet.imageDataUrl;
+        applySheetImageState(sheet.imageDataUrl, sheet);
       } else if (typeof PayrollDB.fetchSheetImage === 'function' && !sheet.isDemo) {
         const loadingSheetId = sheet.id;
         PayrollDB.fetchSheetImage(loadingSheetId).then(dataUrl => {
-          if (dataUrl && getActiveSheet()?.id === loadingSheetId) {
-            imgEl.src = dataUrl;
-          } else if (!dataUrl && getActiveSheet()?.id === loadingSheetId) {
-            imgEl.src = 'sample_jobsheet.jpg';
+          const current = getActiveSheet();
+          if (current && current.id === loadingSheetId) {
+            applySheetImageState(dataUrl, current);
           }
         });
       } else {
-        imgEl.src = 'sample_jobsheet.jpg';
+        applySheetImageState('', sheet);
       }
     }
 

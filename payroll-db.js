@@ -1290,6 +1290,60 @@ ${workerContext}
   }
 
   // ===========================================================================
+  // PERSISTENT BROWSER INDEXEDDB IMAGE CACHE (Survives Ctrl+F5 without 5MB localStorage limits)
+  // ===========================================================================
+  const IDB_NAME = 'qc_payroll_images_idb';
+  const IDB_STORE = 'sheet_images';
+  let idbPromise = null;
+
+  function openImageIDB() {
+    if (typeof indexedDB === 'undefined') return Promise.resolve(null);
+    if (idbPromise) return idbPromise;
+    idbPromise = new Promise((resolve) => {
+      try {
+        const req = indexedDB.open(IDB_NAME, 1);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(IDB_STORE)) {
+            db.createObjectStore(IDB_STORE);
+          }
+        };
+        req.onsuccess = (e) => resolve(e.target.result);
+        req.onerror = () => resolve(null);
+      } catch (e) {
+        resolve(null);
+      }
+    });
+    return idbPromise;
+  }
+
+  async function saveImageToIDB(sheetId, dataUrl) {
+    if (!sheetId || !dataUrl || !dataUrl.startsWith('data:image')) return;
+    try {
+      const db = await openImageIDB();
+      if (!db) return;
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(dataUrl, sheetId);
+    } catch (e) {}
+  }
+
+  async function getImageFromIDB(sheetId) {
+    if (!sheetId) return '';
+    try {
+      const db = await openImageIDB();
+      if (!db) return '';
+      return await new Promise((resolve) => {
+        const tx = db.transaction(IDB_STORE, 'readonly');
+        const req = tx.objectStore(IDB_STORE).get(sheetId);
+        req.onsuccess = () => resolve(req.result || '');
+        req.onerror = () => resolve('');
+      });
+    } catch (e) {
+      return '';
+    }
+  }
+
+  // ===========================================================================
   // REAL-TIME MULTI-DEVICE CLOUD DATABASE SYNC (SUPABASE PostgreSQL JSONB)
   // Uses isolated namespace source IN ('QC_PAYROLL_CONFIG','QC_PAYROLL_SHEET','QC_PAYROLL_QUEUE')
   // and status = 'COMPLETED' so traceability-web (which only reads PENDING/APPROVED) is untouched.
@@ -1403,11 +1457,30 @@ ${workerContext}
       memoryImageCache.has(sheetObj.id)
     );
 
+    // 1. Save image to RAM cache, IndexedDB, and isolated QC_PAYROLL_IMAGE row (uploaded once per sheet)
     if (sheetObj.imageDataUrl && sheetObj.imageDataUrl.startsWith('data:image')) {
       memoryImageCache.set(sheetObj.id, sheetObj.imageDataUrl);
+      saveImageToIDB(sheetObj.id, sheetObj.imageDataUrl);
+      if (!uploadedImageIds.has(sheetObj.id)) {
+        const imgOk = await cloudUpsertBatchRow({
+          batch_id: `QC_PAYROLL_IMG_${sheetObj.id}`,
+          batch_name: `Image ${sheetObj.workerName || ''} (${sheetObj.sheetDate || ''})`,
+          source: 'QC_PAYROLL_IMAGE',
+          status: 'COMPLETED',
+          total_skus: 1,
+          total_units: 0,
+          total_material_cost: 0,
+          items_json: {
+            sheetId: sheetObj.id,
+            imageDataUrl: sheetObj.imageDataUrl
+          },
+          updated_at: new Date().toISOString()
+        });
+        if (imgOk) uploadedImageIds.add(sheetObj.id);
+      }
     }
 
-    // Store ONLY lightweight metadata + items in QC_PAYROLL_SHEET (~1.5KB) so Supabase Realtime WAL & PostgREST never choke on Base64 blobs
+    // 2. Store lightweight metadata + items in QC_PAYROLL_SHEET (~1.5KB) so main sync stays fast
     const slimSheetForCloud = {
       ...sheetObj,
       imageDataUrl: '',
@@ -1439,7 +1512,14 @@ ${workerContext}
     const existing = getSavedSheets().find(s => s.id === sheetId);
     if (existing && existing.imageDataUrl && existing.imageDataUrl.startsWith('data:image')) {
       memoryImageCache.set(sheetId, existing.imageDataUrl);
+      saveImageToIDB(sheetId, existing.imageDataUrl);
       return existing.imageDataUrl;
+    }
+    const idbImg = await getImageFromIDB(sheetId);
+    if (idbImg && idbImg.startsWith('data:image')) {
+      memoryImageCache.set(sheetId, idbImg);
+      if (existing) existing.imageDataUrl = idbImg;
+      return idbImg;
     }
     if (pendingImageFetchPromises.has(sheetId)) {
       return pendingImageFetchPromises.get(sheetId);
@@ -1468,6 +1548,7 @@ ${workerContext}
         const img = data?.imageDataUrl || '';
         if (img) {
           memoryImageCache.set(sheetId, img);
+          saveImageToIDB(sheetId, img);
           uploadedImageIds.add(sheetId);
           const targetSheet = getSavedSheets().find(s => s.id === sheetId);
           if (targetSheet) {
@@ -1574,8 +1655,12 @@ ${workerContext}
     if (!Array.isArray(sheets)) return;
     memorySheets = sheets;
     try {
-      // Keep full images in memorySheets & Supabase Cloud, but slim older images in localStorage so it never exceeds 5MB
+      // Persist every image into RAM + IndexedDB first, then slim older images in localStorage so it never exceeds 5MB
       const slimmedForLocal = sheets.map((s, idx) => {
+        if (s && s.id && s.imageDataUrl && s.imageDataUrl.startsWith('data:image')) {
+          memoryImageCache.set(s.id, s.imageDataUrl);
+          saveImageToIDB(s.id, s.imageDataUrl);
+        }
         if (idx >= 10 && s.imageDataUrl && s.imageDataUrl.startsWith('data:image')) {
           return { ...s, imageDataUrl: '' };
         }
@@ -1836,6 +1921,21 @@ ${workerContext}
             if (pushedMissingCount < 2) {
               pushedMissingCount++;
               pushSheetToCloud(loc).catch(() => {});
+            }
+          } else if (
+            loc &&
+            loc.id &&
+            loc.imageDataUrl &&
+            loc.imageDataUrl.startsWith('data:image') &&
+            !uploadedImageIds.has(loc.id)
+          ) {
+            const mergedTarget = mergedSheetMap.get(loc.id);
+            if (mergedTarget && !mergedTarget.imageDataUrl) {
+              mergedTarget.imageDataUrl = loc.imageDataUrl;
+            }
+            if (pushedMissingCount < 3) {
+              pushedMissingCount++;
+              pushSheetToCloud(mergedTarget || loc).catch(() => {});
             }
           }
         }
