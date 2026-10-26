@@ -87,7 +87,7 @@
         renderSkuMappingTable();
         renderWorkerMappingTable();
       }
-      if ((!isTypingInInput && !activeSkuSearchState) || !meta.isBackground) {
+      if (!meta.isBackground || (meta.sheetsChangedFromCloud && !isTypingInInput && !activeSkuSearchState)) {
         renderReviewSelectorAndWorkspace();
       }
     });
@@ -1481,11 +1481,24 @@
     skuPortalEl.style.maxHeight = '320px';
     document.body.appendChild(skuPortalEl);
 
-    // Close portal when clicking outside
+    // Close portal when clicking outside (if user typed a matching keyword, auto-commit it!)
     document.addEventListener('mousedown', (e) => {
       if (!skuPortalEl || skuPortalEl.classList.contains('hidden')) return;
       if (skuPortalEl.contains(e.target)) return;
       if (activeSkuSearchState && activeSkuSearchState.inputEl && activeSkuSearchState.inputEl.parentElement.contains(e.target)) return;
+      if (
+        activeSkuSearchState &&
+        activeSkuSearchState.isDirty &&
+        activeSkuSearchState.filtered &&
+        activeSkuSearchState.filtered.length > 0 &&
+        typeof activeSkuSearchState.commitSkuSelection === 'function'
+      ) {
+        const picked = activeSkuSearchState.filtered[activeSkuSearchState.highlightIdx] || activeSkuSearchState.filtered[0];
+        if (picked) {
+          activeSkuSearchState.commitSkuSelection(picked.model);
+          return;
+        }
+      }
       closeSkuSearchPortal(true);
     });
 
@@ -1669,9 +1682,16 @@
       syncReviewTableToSheetObject(sheet);
       PayrollDB.upsertSheet(sheet);
       renderReviewSelectorAndWorkspace();
+      const btnSaveSheet = document.getElementById('btn-save-verified-sheet');
+      if (btnSaveSheet) {
+        btnSaveSheet.innerHTML = '<span>✅ บันทึก SKU อัตโนมัติแล้ว! (กดยืนยันใบงานได้)</span>';
+        setTimeout(() => {
+          btnSaveSheet.innerHTML = '<span>✅ บันทึก & ยืนยันยอดใบงานนี้เข้าสรุปงวดจ่ายเงิน</span>';
+        }, 2500);
+      }
     };
 
-    const openForInput = (inputEl, initialQuery = '') => {
+    const openForInput = (inputEl, initialQuery = '', isDirty = false) => {
       const tr = inputEl.closest('tr[data-item-idx]');
       const hiddenEl = tr?.querySelector('.rev-item-sku');
       if (!tr || !hiddenEl) return;
@@ -1685,7 +1705,9 @@
         inputEl,
         hiddenEl,
         formatSkuDisplay,
+        commitSkuSelection,
         query: initialQuery,
+        isDirty,
         filtered,
         highlightIdx
       };
@@ -1698,7 +1720,7 @@
 
     tbody.querySelectorAll('.rev-item-sku-search').forEach(inputEl => {
       inputEl.addEventListener('focus', () => {
-        openForInput(inputEl, '');
+        openForInput(inputEl, '', false);
         setTimeout(() => {
           if (document.activeElement === inputEl) inputEl.select();
         }, 10);
@@ -1706,7 +1728,7 @@
 
       inputEl.addEventListener('click', () => {
         if (!activeSkuSearchState || activeSkuSearchState.inputEl !== inputEl) {
-          openForInput(inputEl, '');
+          openForInput(inputEl, '', false);
         }
       });
 
@@ -1714,9 +1736,10 @@
         const q = inputEl.value;
         const filtered = filterSkusByKeyword(q);
         if (!activeSkuSearchState || activeSkuSearchState.inputEl !== inputEl) {
-          openForInput(inputEl, q);
+          openForInput(inputEl, q, true);
         } else {
           activeSkuSearchState.query = q;
+          activeSkuSearchState.isDirty = true;
           activeSkuSearchState.filtered = filtered;
           activeSkuSearchState.highlightIdx = 0;
           positionSkuSearchPortal();
@@ -1744,6 +1767,13 @@
           if (len > 0) {
             const picked = activeSkuSearchState.filtered[activeSkuSearchState.highlightIdx] || activeSkuSearchState.filtered[0];
             if (picked) commitSkuSelection(picked.model);
+          }
+        } else if (e.key === 'Tab') {
+          if (activeSkuSearchState.isDirty && len > 0) {
+            const picked = activeSkuSearchState.filtered[activeSkuSearchState.highlightIdx] || activeSkuSearchState.filtered[0];
+            if (picked) commitSkuSelection(picked.model);
+          } else {
+            closeSkuSearchPortal(true);
           }
         } else if (e.key === 'Escape') {
           e.preventDefault();

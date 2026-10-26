@@ -229,6 +229,10 @@ const PayrollDB = (function () {
   let lastCloudSyncTime = null;
   let lastLocalMappingEditMs = 0;
   let mappingPushTimer = null;
+  let lastLocalSheetEditMs = 0;
+  const localSheetEditTimes = new Map();
+  const pendingSheetPushTimers = new Map();
+  const activeSheetPushPromises = new Set();
 
   function getLocalMappingsUpdatedAt() {
     return localStorage.getItem('qc_payroll_mappings_updated_at_v1') || '';
@@ -1505,7 +1509,20 @@ ${workerContext}
     saveSheets(all);
 
     if (!skipCloudPush) {
-      pushSheetToCloud(sheetObj).catch(e => console.warn('Cloud sheet push warning:', e));
+      lastLocalSheetEditMs = Date.now();
+      localSheetEditTimes.set(sheetObj.id, Date.now());
+      if (pendingSheetPushTimers.has(sheetObj.id)) {
+        clearTimeout(pendingSheetPushTimers.get(sheetObj.id));
+      }
+      const timerId = setTimeout(() => {
+        pendingSheetPushTimers.delete(sheetObj.id);
+        const latestSheet = getSavedSheets().find(s => s.id === sheetObj.id) || sheetObj;
+        activeSheetPushPromises.add(latestSheet.id);
+        pushSheetToCloud(latestSheet)
+          .catch(e => console.warn('Cloud sheet push warning:', e))
+          .finally(() => activeSheetPushPromises.delete(latestSheet.id));
+      }, 250);
+      pendingSheetPushTimers.set(sheetObj.id, timerId);
     }
     return sheetObj;
   }
@@ -1613,9 +1630,41 @@ ${workerContext}
         pushConfigAndMappingsToCloud().catch(() => {});
       }
 
-      // 2. Merge Sheets (Cloud + any unsynced Local sheets)
+      // 2. Merge Sheets (Respecting updatedAt & recent local edits so Tab 3 edits NEVER bounce back)
       const currentLocalSheets = getSavedSheets();
+      const localSheetMap = new Map(currentLocalSheets.map(s => [s.id, s]));
       const cloudSheetMap = new Map(cloudSheets.map(s => [s.id, s]));
+      let sheetsChangedFromCloud = false;
+
+      // Check cloud sheets against local sheets
+      for (const [id, cSheet] of cloudSheetMap.entries()) {
+        const loc = localSheetMap.get(id);
+        if (!loc) {
+          sheetsChangedFromCloud = true;
+          continue;
+        }
+        const recentlyEditedLocally =
+          pendingSheetPushTimers.has(id) ||
+          activeSheetPushPromises.has(id) ||
+          (Date.now() - (localSheetEditTimes.get(id) || 0)) < 15000;
+
+        const locTime = loc.updatedAt || loc.createdAt || '';
+        const cloudTime = cSheet.updatedAt || cSheet.createdAt || '';
+
+        if (recentlyEditedLocally || (locTime && (!cloudTime || locTime >= cloudTime))) {
+          // Local sheet is newer or actively being edited — keep local version!
+          if (!loc.imageDataUrl && cSheet.imageDataUrl) {
+            loc.imageDataUrl = cSheet.imageDataUrl;
+          }
+          cloudSheetMap.set(id, loc);
+          if (locTime > cloudTime && !pendingSheetPushTimers.has(id) && !activeSheetPushPromises.has(id)) {
+            pushSheetToCloud(loc).catch(() => {});
+          }
+        } else if (cloudTime > locTime) {
+          // Cloud has a genuinely newer edit from another device
+          sheetsChangedFromCloud = true;
+        }
+      }
 
       // Push any local non-demo sheets that are missing in cloud
       for (const loc of currentLocalSheets) {
@@ -1655,6 +1704,7 @@ ${workerContext}
         ok: true,
         isBackground,
         mappingsChangedFromCloud,
+        sheetsChangedFromCloud,
         sheetsCount: mergedSheets.length,
         queueCount: memoryQueue.length,
         syncedAt: lastCloudSyncTime
