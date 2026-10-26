@@ -227,6 +227,11 @@ const PayrollDB = (function () {
   let cloudSyncListeners = [];
   let isSyncingFromCloud = false;
   let lastCloudSyncTime = null;
+  let lastSuccessfulSyncIso = '';
+  let consecutiveSyncFailures = 0;
+  let nextAllowedSyncTimeMs = 0;
+  const cloudWriteQueue = [];
+  let isProcessingCloudWriteQueue = false;
   let lastLocalMappingEditMs = 0;
   let mappingPushTimer = null;
   let lastLocalSheetEditMs = 0;
@@ -1289,23 +1294,60 @@ ${workerContext}
   // Uses isolated namespace source IN ('QC_PAYROLL_CONFIG','QC_PAYROLL_SHEET','QC_PAYROLL_QUEUE')
   // and status = 'COMPLETED' so traceability-web (which only reads PENDING/APPROVED) is untouched.
   // ===========================================================================
+  async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function enqueueCloudWrite(taskFn) {
+    return new Promise((resolve) => {
+      cloudWriteQueue.push({ taskFn, resolve });
+      drainCloudWriteQueue();
+    });
+  }
+
+  async function drainCloudWriteQueue() {
+    if (isProcessingCloudWriteQueue) return;
+    isProcessingCloudWriteQueue = true;
+    while (cloudWriteQueue.length > 0) {
+      const { taskFn, resolve } = cloudWriteQueue.shift();
+      try {
+        const ok = await taskFn();
+        resolve(ok);
+      } catch (e) {
+        console.warn('Cloud write queue error:', e);
+        resolve(false);
+      }
+      // 180ms gap between writes prevents saturating Supabase Free Tier connection pool & WAL
+      await new Promise(r => setTimeout(r, 180));
+    }
+    isProcessingCloudWriteQueue = false;
+  }
+
   async function cloudUpsertBatchRow(rowPayload) {
     const cfg = getConfig();
     const sUrl = cfg.supabaseUrl || DEFAULT_SUPABASE_URL;
     const sKey = cfg.supabaseKey || DEFAULT_SUPABASE_KEY;
     if (!sUrl || !sKey) return false;
 
-    const res = await fetch(`${sUrl}/rest/v1/production_batches?on_conflict=batch_id`, {
-      method: 'POST',
-      headers: {
-        'apikey': sKey,
-        'Authorization': `Bearer ${sKey}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates,return=minimal'
-      },
-      body: JSON.stringify(rowPayload)
+    return enqueueCloudWrite(async () => {
+      const res = await fetchWithTimeout(`${sUrl}/rest/v1/production_batches?on_conflict=batch_id`, {
+        method: 'POST',
+        headers: {
+          'apikey': sKey,
+          'Authorization': `Bearer ${sKey}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'resolution=merge-duplicates,return=minimal'
+        },
+        body: JSON.stringify(rowPayload)
+      }, 9000);
+      return res.ok;
     });
-    return res.ok;
   }
 
   async function cloudDeleteBatchRow(batchId) {
@@ -1314,14 +1356,16 @@ ${workerContext}
     const sKey = cfg.supabaseKey || DEFAULT_SUPABASE_KEY;
     if (!sUrl || !sKey || !batchId) return false;
 
-    const res = await fetch(`${sUrl}/rest/v1/production_batches?batch_id=eq.${encodeURIComponent(batchId)}`, {
-      method: 'DELETE',
-      headers: {
-        'apikey': sKey,
-        'Authorization': `Bearer ${sKey}`
-      }
+    return enqueueCloudWrite(async () => {
+      const res = await fetchWithTimeout(`${sUrl}/rest/v1/production_batches?batch_id=eq.${encodeURIComponent(batchId)}`, {
+        method: 'DELETE',
+        headers: {
+          'apikey': sKey,
+          'Authorization': `Bearer ${sKey}`
+        }
+      }, 8000);
+      return res.ok;
     });
-    return res.ok;
   }
 
   async function pushConfigAndMappingsToCloud() {
@@ -1361,29 +1405,9 @@ ${workerContext}
 
     if (sheetObj.imageDataUrl && sheetObj.imageDataUrl.startsWith('data:image')) {
       memoryImageCache.set(sheetObj.id, sheetObj.imageDataUrl);
-      if (!uploadedImageIds.has(sheetObj.id)) {
-        uploadedImageIds.add(sheetObj.id);
-        cloudUpsertBatchRow({
-          batch_id: `QC_PAYROLL_IMG_${sheetObj.id}`,
-          batch_name: `Image for ${sheetObj.id}`,
-          source: 'QC_PAYROLL_IMAGE',
-          status: 'COMPLETED',
-          total_skus: 1,
-          total_units: 1,
-          total_material_cost: 0,
-          items_json: {
-            id: sheetObj.id,
-            imageDataUrl: sheetObj.imageDataUrl
-          },
-          updated_at: new Date().toISOString()
-        }).catch(e => {
-          uploadedImageIds.delete(sheetObj.id);
-          console.warn('Cloud image upload warning:', e);
-        });
-      }
     }
 
-    // Store lightweight metadata + items in QC_PAYROLL_SHEET (without 600KB base64 image string so sync is < 200ms)
+    // Store ONLY lightweight metadata + items in QC_PAYROLL_SHEET (~1.5KB) so Supabase Realtime WAL & PostgREST never choke on Base64 blobs
     const slimSheetForCloud = {
       ...sheetObj,
       imageDataUrl: '',
@@ -1639,6 +1663,9 @@ ${workerContext}
   // Pull & Merge all Config, Queue Photos, and Verified Job Sheets from Supabase Cloud
   async function syncFromCloud(isBackground = false) {
     if (isSyncingFromCloud) return { ok: false, busy: true };
+    if (isBackground && Date.now() < nextAllowedSyncTimeMs) {
+      return { ok: true, skippedBackoff: true };
+    }
     isSyncingFromCloud = true;
 
     const cfg = getConfig();
@@ -1646,19 +1673,49 @@ ${workerContext}
     const sKey = cfg.supabaseKey || DEFAULT_SUPABASE_KEY;
 
     try {
-      const url = `${sUrl}/rest/v1/production_batches?source=in.(QC_PAYROLL_CONFIG,QC_PAYROLL_SHEET,QC_PAYROLL_QUEUE)&select=batch_id,source,items_json,updated_at,created_at&limit=1000`;
-      const res = await fetch(url, {
+      const useIncremental = Boolean(isBackground && lastSuccessfulSyncIso);
+      const syncStartTimeIso = new Date(Date.now() - 10000).toISOString();
+      let url = `${sUrl}/rest/v1/production_batches?source=in.(QC_PAYROLL_CONFIG,QC_PAYROLL_SHEET,QC_PAYROLL_QUEUE)&select=batch_id,source,items_json,updated_at,created_at&limit=1000`;
+      if (useIncremental) {
+        url += `&updated_at=gt.${encodeURIComponent(lastSuccessfulSyncIso)}`;
+      }
+
+      const res = await fetchWithTimeout(url, {
         headers: {
           'apikey': sKey,
           'Authorization': `Bearer ${sKey}`
         }
-      });
+      }, 8500);
       if (!res.ok) {
         throw new Error(`Supabase HTTP ${res.status}`);
       }
       const rows = await res.json();
       if (!Array.isArray(rows)) {
         throw new Error('Invalid cloud response');
+      }
+
+      consecutiveSyncFailures = 0;
+      nextAllowedSyncTimeMs = 0;
+      lastSuccessfulSyncIso = syncStartTimeIso;
+
+      // Fast path: if incremental sync returned 0 changed rows, we're 100% in sync!
+      if (useIncremental && rows.length === 0) {
+        lastCloudSyncTime = new Date();
+        notifyCloudSync({
+          ok: true,
+          isBackground: true,
+          mappingsChangedFromCloud: false,
+          sheetsChangedFromCloud: false,
+          sheetsCount: getSavedSheets().length,
+          queueCount: memoryQueue.length,
+          syncedAt: lastCloudSyncTime
+        });
+        return {
+          ok: true,
+          sheetsCount: getSavedSheets().length,
+          queueCount: memoryQueue.length,
+          syncedAt: lastCloudSyncTime
+        };
       }
 
       let cloudConfigRow = null;
@@ -1725,25 +1782,26 @@ ${workerContext}
           }
         }
 
-        // If local has an API key that cloud didn't have yet, push it up
         if (localCfg.geminiApiKey && !cloudConfigRow.geminiApiKey) {
           pushConfigAndMappingsToCloud().catch(() => {});
         }
-      } else {
-        // First time initializing cloud config
+      } else if (!useIncremental) {
         pushConfigAndMappingsToCloud().catch(() => {});
       }
 
       // 2. Merge Sheets (Respecting updatedAt & recent local edits so Tab 3 edits NEVER bounce back)
       const currentLocalSheets = getSavedSheets();
       const localSheetMap = new Map(currentLocalSheets.map(s => [s.id, s]));
-      const cloudSheetMap = new Map(cloudSheets.map(s => [s.id, s]));
+      const mergedSheetMap = useIncremental
+        ? new Map(currentLocalSheets.map(s => [s.id, s]))
+        : new Map(cloudSheets.map(s => [s.id, s]));
       let sheetsChangedFromCloud = false;
 
-      // Check cloud sheets against local sheets
-      for (const [id, cSheet] of cloudSheetMap.entries()) {
+      for (const cSheet of cloudSheets) {
+        const id = cSheet.id;
         const loc = localSheetMap.get(id);
         if (!loc) {
+          mergedSheetMap.set(id, cSheet);
           sheetsChangedFromCloud = true;
           continue;
         }
@@ -1756,52 +1814,59 @@ ${workerContext}
         const cloudTime = cSheet.updatedAt || cSheet.createdAt || '';
 
         if (recentlyEditedLocally || (locTime && (!cloudTime || locTime >= cloudTime))) {
-          // Local sheet is newer or actively being edited — keep local version!
           if (!loc.imageDataUrl && cSheet.imageDataUrl) {
             loc.imageDataUrl = cSheet.imageDataUrl;
           }
-          cloudSheetMap.set(id, loc);
-          if (locTime > cloudTime && !pendingSheetPushTimers.has(id) && !activeSheetPushPromises.has(id)) {
-            pushSheetToCloud(loc).catch(() => {});
-          }
+          mergedSheetMap.set(id, loc);
         } else if (cloudTime > locTime) {
-          // Cloud has a genuinely newer edit from another device
+          if (!cSheet.imageDataUrl && loc.imageDataUrl) {
+            cSheet.imageDataUrl = loc.imageDataUrl;
+          }
+          mergedSheetMap.set(id, cSheet);
           sheetsChangedFromCloud = true;
         }
       }
 
-      // Push any local non-demo sheets that are missing in cloud
-      for (const loc of currentLocalSheets) {
-        if (loc && loc.id && !cloudSheetMap.has(loc.id) && !loc.isDemo) {
-          cloudSheetMap.set(loc.id, loc);
-          pushSheetToCloud(loc).catch(() => {});
+      // Keep any local non-demo sheets that aren't in cloud yet (and push at most 2 per full sync so we never flood the pool)
+      if (!useIncremental) {
+        let pushedMissingCount = 0;
+        for (const loc of currentLocalSheets) {
+          if (loc && loc.id && !mergedSheetMap.has(loc.id) && !loc.isDemo) {
+            mergedSheetMap.set(loc.id, loc);
+            if (pushedMissingCount < 2) {
+              pushedMissingCount++;
+              pushSheetToCloud(loc).catch(() => {});
+            }
+          }
         }
       }
 
-      const mergedSheets = Array.from(cloudSheetMap.values()).sort((a, b) => {
+      const mergedSheets = Array.from(mergedSheetMap.values()).sort((a, b) => {
         const tA = a.createdAt || a.sheetDate || '';
         const tB = b.createdAt || b.sheetDate || '';
         return tB.localeCompare(tA);
       });
       saveSheets(mergedSheets);
 
-      // 3. Merge Queue Items (Mobile photos waiting to be scanned or already scanned)
-      const cloudQueueMap = new Map(cloudQueue.map(q => [q.id, q]));
-      for (const locQ of memoryQueue) {
-        if (locQ && locQ.id && !cloudQueueMap.has(locQ.id)) {
-          // If local item is currently processing, keep it
-          if (locQ.status === 'PROCESSING') {
+      // 3. Merge Queue Items
+      if (!useIncremental || cloudQueue.length > 0) {
+        const cloudQueueMap = useIncremental
+          ? new Map(memoryQueue.map(q => [q.id, q]))
+          : new Map(cloudQueue.map(q => [q.id, q]));
+        for (const cQ of cloudQueue) {
+          if (cQ && cQ.id) cloudQueueMap.set(cQ.id, cQ);
+        }
+        for (const locQ of memoryQueue) {
+          if (locQ && locQ.id && (!cloudQueueMap.has(locQ.id) || locQ.status === 'PROCESSING')) {
             cloudQueueMap.set(locQ.id, locQ);
           }
-        } else if (locQ && locQ.id && locQ.status === 'PROCESSING') {
-          cloudQueueMap.set(locQ.id, locQ);
         }
+        memoryQueue = Array.from(cloudQueueMap.values()).sort((a, b) => {
+          const tA = a.createdAt || '';
+          const tB = b.createdAt || '';
+          return tB.localeCompare(tA);
+        });
       }
-      memoryQueue = Array.from(cloudQueueMap.values()).sort((a, b) => {
-        const tA = a.createdAt || '';
-        const tB = b.createdAt || '';
-        return tB.localeCompare(tA);
-      });
 
       lastCloudSyncTime = new Date();
       notifyCloudSync({
@@ -1821,8 +1886,18 @@ ${workerContext}
         syncedAt: lastCloudSyncTime
       };
     } catch (err) {
-      console.warn('Cloud sync warning:', err);
-      notifyCloudSync({ ok: false, error: err.message });
+      consecutiveSyncFailures++;
+      // Exponential backoff (25s -> 45s -> 90s) when Supabase Free Tier is busy so it recovers immediately
+      const backoffMs = Math.min(90000, 20000 * Math.pow(1.6, consecutiveSyncFailures));
+      nextAllowedSyncTimeMs = Date.now() + backoffMs;
+      console.warn(`Cloud sync warning (backoff ${Math.round(backoffMs / 1000)}s):`, err);
+      notifyCloudSync({
+        ok: false,
+        isBackground,
+        consecutiveSyncFailures,
+        lastSyncedAt: lastCloudSyncTime,
+        error: err.message
+      });
       return { ok: false, error: err.message };
     } finally {
       isSyncingFromCloud = false;
@@ -1989,7 +2064,7 @@ ${workerContext}
 
   initSupabase();
 
-  // Auto-sync when tab gains focus or every 7 seconds
+  // Auto-sync when tab gains focus or every 20 seconds (with incremental delta sync & backoff)
   if (typeof window !== 'undefined') {
     window.addEventListener('focus', () => syncFromCloud(true));
     document.addEventListener('visibilitychange', () => {
@@ -1999,7 +2074,7 @@ ${workerContext}
       if (document.visibilityState === 'visible') {
         syncFromCloud(true);
       }
-    }, 7000);
+    }, 20000);
   }
 
   return {

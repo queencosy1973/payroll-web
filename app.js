@@ -70,9 +70,13 @@
           const timeStr = meta.syncedAt ? meta.syncedAt.toLocaleTimeString('th-TH') : '';
           badgeSync.className = 'px-2.5 py-0.5 text-[10px] font-black rounded-full bg-cyan-100 text-cyan-800 border border-cyan-300 cursor-pointer';
           badgeSync.textContent = `☁️ ซิงค์ฐานข้อมูลกลางแล้ว (${timeStr})`;
+        } else if (meta && meta.isBackground) {
+          const lastStr = meta.lastSyncedAt ? `ล่าสุด ${meta.lastSyncedAt.toLocaleTimeString('th-TH')}` : 'ทำงานต่อได้ปกติ';
+          badgeSync.className = 'px-2.5 py-0.5 text-[10px] font-black rounded-full bg-amber-100 text-amber-900 border border-amber-300 cursor-pointer';
+          badgeSync.textContent = `🟡 เซฟในเครื่องแล้ว • รอซิงค์คลาวด์ (${lastStr})`;
         } else {
           badgeSync.className = 'px-2.5 py-0.5 text-[10px] font-black rounded-full bg-rose-100 text-rose-800 border border-rose-300 cursor-pointer';
-          badgeSync.textContent = `⚠️ ออฟไลน์ (คลิกเพื่อลองซิงค์ใหม่)`;
+          badgeSync.textContent = `⚠️ คลาวด์กำลังคิวเต็ม (คลิกเพื่อซิงค์ใหม่ — ข้อมูลในเครื่องปลอดภัย)`;
         }
       }
 
@@ -863,16 +867,34 @@
     }
   }
 
+  let isAutoScanDraining = false;
+
+  async function drainAutoScanQueue() {
+    if (isAutoScanDraining) return;
+    isAutoScanDraining = true;
+    try {
+      while (true) {
+        const nextPending = PayrollDB.getQueueItems().find(q => q.status === 'PENDING');
+        if (!nextPending) break;
+        await processQueueItem(nextPending.id);
+      }
+    } finally {
+      isAutoScanDraining = false;
+    }
+  }
+
   function enqueueImageFiles(files) {
     const imageFiles = files.filter(f => f.type.startsWith('image/'));
     if (imageFiles.length === 0) return;
 
-    imageFiles.forEach(file => {
+    const autoScan = Boolean(document.getElementById('chk-auto-ai-scan')?.checked);
+
+    imageFiles.forEach((file, idx) => {
       const reader = new FileReader();
       reader.onload = (e) => {
-        resizeImageDataUrl(e.target.result, 1280, 0.80).then(resizedUrl => {
+        resizeImageDataUrl(e.target.result, 1050, 0.68).then(resizedUrl => {
           const item = {
-            id: 'Q-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase(),
+            id: 'Q-' + Date.now() + '-' + idx + '-' + Math.random().toString(36).slice(2, 6).toUpperCase(),
             name: file.name || `ภาพใบงาน (${new Date().toLocaleTimeString('th-TH')})`,
             imageDataUrl: resizedUrl,
             status: 'PENDING',
@@ -880,13 +902,13 @@
             sheetId: null,
             createdAt: new Date().toISOString()
           };
-          PayrollDB.upsertQueueItem(item, true);
+          // If autoScan is enabled on this device, scan locally first and push the resulting lightweight Sheet to Cloud
+          PayrollDB.upsertQueueItem(item, !autoScan);
           renderQueueList();
           updateHeaderBadges();
 
-          const autoScan = document.getElementById('chk-auto-ai-scan')?.checked;
           if (autoScan) {
-            processQueueItem(item.id);
+            drainAutoScanQueue();
           }
         });
       };
@@ -894,22 +916,20 @@
     });
   }
 
-  function resizeImageDataUrl(dataUrl, maxDim = 1280, quality = 0.80) {
+  function resizeImageDataUrl(dataUrl, maxDim = 1050, quality = 0.68) {
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
         let w = img.width;
         let h = img.height;
-        if (w <= maxDim && h <= maxDim) {
-          resolve(dataUrl);
-          return;
-        }
-        if (w > h) {
-          h = Math.round((h * maxDim) / w);
-          w = maxDim;
-        } else {
-          w = Math.round((w * maxDim) / h);
-          h = maxDim;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
         }
         const c = document.createElement('canvas');
         c.width = w;
