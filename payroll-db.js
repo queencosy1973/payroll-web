@@ -1201,8 +1201,8 @@ ${workerContext}
     }
 
     let isoDate = aiData.isoDate || '';
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate) && aiData.rawDate) {
-      // Parse D.M.YY (e.g. 15.6.69 -> 2026-06-15)
+    if (aiData.rawDate) {
+      // Parse D.M.YY (e.g. 15.6.69 -> 2026-06-15) — prefer rawDate over AI isoDate when handwritten Thai year 69 is misread as 67
       const dmY = String(aiData.rawDate).trim().match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
       if (dmY) {
         const d = String(dmY[1]).padStart(2, '0');
@@ -1210,10 +1210,16 @@ ${workerContext}
         let y = parseInt(dmY[3], 10);
         if (y < 100) y = (y + 2500) - 543;
         else if (y > 2400) y = y - 543;
+        if (y >= 2020 && y < 2026) y = 2026;
         isoDate = `${y}-${m}-${d}`;
       }
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+      const yr = parseInt(isoDate.slice(0, 4), 10);
+      if (yr >= 2020 && yr < 2026) {
+        isoDate = `2026-${isoDate.slice(5)}`;
+      }
+    } else {
       isoDate = new Date().toISOString().slice(0, 10);
     }
 
@@ -1632,7 +1638,65 @@ ${workerContext}
 
   // ===========================================================================
   // SAVED JOB SHEETS STORAGE & PAYROLL AGGREGATION (LOCAL + CLOUD SYNCED)
+  // Rule: 1 Job Sheet per 1 Worker per 1 Date (1 ใบงาน = 1 ชื่อช่าง ต่อ 1 วัน)
   // ===========================================================================
+  function getSheetWorkerDayKey(sheet) {
+    if (!sheet || sheet.isDemo) return '';
+    const dt = String(sheet.sheetDate || '').trim();
+    const wKey = String(sheet.workerCode || sheet.workerName || '').trim().toLowerCase();
+    if (!dt || !wKey || wKey === 'ไม่ระบุช่าง') return '';
+    return `${dt}__${wKey}`;
+  }
+
+  function deduplicateSheetsByWorkerAndDate(sheets, deleteRemovedFromCloud = false) {
+    if (!Array.isArray(sheets)) return [];
+    const byWorkerDay = new Map();
+    const result = [];
+
+    for (const s of sheets) {
+      if (!s || !s.id) continue;
+      const wdKey = getSheetWorkerDayKey(s);
+      if (!wdKey) {
+        result.push(s);
+        continue;
+      }
+      if (!byWorkerDay.has(wdKey)) {
+        byWorkerDay.set(wdKey, s);
+        result.push(s);
+      } else {
+        const existing = byWorkerDay.get(wdKey);
+        const exCreatedMs = Date.parse(existing.createdAt || 0) || 0;
+        const exUpdatedMs = Date.parse(existing.updatedAt || existing.createdAt || 0) || 0;
+        const exEdited = (exUpdatedMs - exCreatedMs) > 5000;
+
+        const curCreatedMs = Date.parse(s.createdAt || 0) || 0;
+        const curUpdatedMs = Date.parse(s.updatedAt || s.createdAt || 0) || 0;
+        const curEdited = (curUpdatedMs - curCreatedMs) > 5000;
+
+        const preferCurrent = (curEdited && !exEdited) || (curEdited === exEdited && curUpdatedMs > exUpdatedMs);
+        if (preferCurrent) {
+          if (!s.imageDataUrl && existing.imageDataUrl) {
+            s.imageDataUrl = existing.imageDataUrl;
+          }
+          const idx = result.indexOf(existing);
+          if (idx >= 0) result[idx] = s;
+          byWorkerDay.set(wdKey, s);
+          if (deleteRemovedFromCloud && existing.id !== s.id) {
+            deleteSheetFromCloud(existing.id).catch(() => {});
+          }
+        } else {
+          if (!existing.imageDataUrl && s.imageDataUrl) {
+            existing.imageDataUrl = s.imageDataUrl;
+          }
+          if (deleteRemovedFromCloud && s.id !== existing.id) {
+            deleteSheetFromCloud(s.id).catch(() => {});
+          }
+        }
+      }
+    }
+    return result;
+  }
+
   function getSavedSheets() {
     if (Array.isArray(memorySheets)) {
       return memorySheets;
@@ -1642,7 +1706,7 @@ ${workerContext}
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          memorySheets = parsed;
+          memorySheets = deduplicateSheetsByWorkerAndDate(parsed, false);
           return memorySheets;
         }
       }
@@ -1653,10 +1717,11 @@ ${workerContext}
 
   function saveSheets(sheets) {
     if (!Array.isArray(sheets)) return;
-    memorySheets = sheets;
+    const deduped = deduplicateSheetsByWorkerAndDate(sheets, false);
+    memorySheets = deduped;
     try {
       // Persist every image into RAM + IndexedDB first, then slim older images in localStorage so it never exceeds 5MB
-      const slimmedForLocal = sheets.map((s, idx) => {
+      const slimmedForLocal = deduped.map((s, idx) => {
         if (s && s.id && s.imageDataUrl && s.imageDataUrl.startsWith('data:image')) {
           memoryImageCache.set(s.id, s.imageDataUrl);
           saveImageToIDB(s.id, s.imageDataUrl);
@@ -1669,7 +1734,7 @@ ${workerContext}
       localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(slimmedForLocal));
     } catch (quotaErr) {
       try {
-        const metaOnly = sheets.map(s => ({
+        const metaOnly = deduped.map(s => ({
           ...s,
           imageDataUrl: (s.imageDataUrl && s.imageDataUrl.startsWith('data:image')) ? '' : s.imageDataUrl
         }));
@@ -1707,12 +1772,36 @@ ${workerContext}
     sheetObj.updatedAt = new Date().toISOString();
 
     const all = getSavedSheets();
-    const idx = all.findIndex(s => s.id === sheetObj.id);
+    let idx = all.findIndex(s => s.id === sheetObj.id);
+
+    // Enforce 1 Sheet per 1 Worker per 1 Date: if a sheet for the same (sheetDate, workerCode) already exists, update that sheet instead of creating a duplicate!
+    const incomingWdKey = getSheetWorkerDayKey(sheetObj);
+    if (idx < 0 && incomingWdKey) {
+      const sameWorkerDayIdx = all.findIndex(s => getSheetWorkerDayKey(s) === incomingWdKey);
+      if (sameWorkerDayIdx >= 0) {
+        idx = sameWorkerDayIdx;
+        sheetObj.id = all[sameWorkerDayIdx].id;
+        sheetObj.createdAt = all[sameWorkerDayIdx].createdAt || sheetObj.createdAt;
+      }
+    }
+
     if (idx >= 0) {
       if (!sheetObj.imageDataUrl && all[idx].imageDataUrl) {
         sheetObj.imageDataUrl = all[idx].imageDataUrl;
       }
       all[idx] = sheetObj;
+      // Also remove any other sheet that now collides on (sheetDate, workerCode) if the user changed worker or date
+      if (incomingWdKey) {
+        for (let i = all.length - 1; i >= 0; i--) {
+          if (i !== idx && getSheetWorkerDayKey(all[i]) === incomingWdKey) {
+            const removed = all.splice(i, 1)[0];
+            if (removed && removed.id && !skipCloudPush) {
+              deleteSheetFromCloud(removed.id).catch(() => {});
+            }
+            if (i < idx) idx--;
+          }
+        }
+      }
     } else {
       all.unshift(sheetObj);
     }
@@ -1912,12 +2001,23 @@ ${workerContext}
         }
       }
 
-      // Keep any local non-demo sheets that aren't in cloud yet (and push at most 2 per full sync so we never flood the pool)
+      // Keep any local non-demo sheets that aren't in cloud yet (only if no sheet for that Worker+Date exists in Cloud)
       if (!useIncremental) {
+        const cloudWorkerDays = new Set();
+        for (const cs of mergedSheetMap.values()) {
+          const wd = getSheetWorkerDayKey(cs);
+          if (wd) cloudWorkerDays.add(wd);
+        }
         let pushedMissingCount = 0;
         for (const loc of currentLocalSheets) {
+          const locWd = getSheetWorkerDayKey(loc);
           if (loc && loc.id && !mergedSheetMap.has(loc.id) && !loc.isDemo) {
+            if (locWd && cloudWorkerDays.has(locWd)) {
+              // A sheet for this worker + date already exists in Cloud; do NOT resurrect local duplicate
+              continue;
+            }
             mergedSheetMap.set(loc.id, loc);
+            if (locWd) cloudWorkerDays.add(locWd);
             if (pushedMissingCount < 2) {
               pushedMissingCount++;
               pushSheetToCloud(loc).catch(() => {});
@@ -1933,19 +2033,20 @@ ${workerContext}
             if (mergedTarget && !mergedTarget.imageDataUrl) {
               mergedTarget.imageDataUrl = loc.imageDataUrl;
             }
-            if (pushedMissingCount < 3) {
+            if (mergedTarget && pushedMissingCount < 3) {
               pushedMissingCount++;
-              pushSheetToCloud(mergedTarget || loc).catch(() => {});
+              pushSheetToCloud(mergedTarget).catch(() => {});
             }
           }
         }
       }
 
-      const mergedSheets = Array.from(mergedSheetMap.values()).sort((a, b) => {
+      const sortedMerged = Array.from(mergedSheetMap.values()).sort((a, b) => {
         const tA = a.createdAt || a.sheetDate || '';
         const tB = b.createdAt || b.sheetDate || '';
         return tB.localeCompare(tA);
       });
+      const mergedSheets = deduplicateSheetsByWorkerAndDate(sortedMerged, !useIncremental);
       saveSheets(mergedSheets);
 
       // 3. Merge Queue Items
@@ -1957,7 +2058,7 @@ ${workerContext}
           if (cQ && cQ.id) cloudQueueMap.set(cQ.id, cQ);
         }
         for (const locQ of memoryQueue) {
-          if (locQ && locQ.id && (!cloudQueueMap.has(locQ.id) || locQ.status === 'PROCESSING')) {
+          if (locQ && locQ.id && (!cloudQueueMap.has(locQ.id) || locQ.status === 'PROCESSING' || locQ.status === 'DONE')) {
             cloudQueueMap.set(locQ.id, locQ);
           }
         }

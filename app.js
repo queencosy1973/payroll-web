@@ -863,18 +863,22 @@
 
     const autoScan = document.getElementById('chk-auto-ai-scan')?.checked;
     if (autoScan) {
-      processQueueItem(item.id);
+      drainAutoScanQueue();
     }
   }
 
   let isAutoScanDraining = false;
+  const activeProcessingQueueIds = new Set();
+  const recentUploadedFileSigs = new Map();
 
   async function drainAutoScanQueue() {
     if (isAutoScanDraining) return;
     isAutoScanDraining = true;
     try {
       while (true) {
-        const nextPending = PayrollDB.getQueueItems().find(q => q.status === 'PENDING');
+        const nextPending = PayrollDB.getQueueItems().find(
+          q => q.status === 'PENDING' && !activeProcessingQueueIds.has(q.id)
+        );
         if (!nextPending) break;
         await processQueueItem(nextPending.id);
       }
@@ -888,8 +892,17 @@
     if (imageFiles.length === 0) return;
 
     const autoScan = Boolean(document.getElementById('chk-auto-ai-scan')?.checked);
+    const nowMs = Date.now();
 
     imageFiles.forEach((file, idx) => {
+      const fileSig = `${file.name || ''}_${file.size || 0}_${file.lastModified || 0}`;
+      const prevTime = recentUploadedFileSigs.get(fileSig) || 0;
+      if (file.name && (nowMs - prevTime) < 45000) {
+        // Prevent accidental double-upload of the exact same file within 45 seconds
+        return;
+      }
+      recentUploadedFileSigs.set(fileSig, nowMs);
+
       const reader = new FileReader();
       reader.onload = (e) => {
         resizeImageDataUrl(e.target.result, 1050, 0.68).then(resizedUrl => {
@@ -944,9 +957,10 @@
   }
 
   async function processQueueItem(queueId) {
+    if (!queueId || activeProcessingQueueIds.has(queueId)) return;
     const queueItems = PayrollDB.getQueueItems();
     const item = queueItems.find(q => q.id === queueId);
-    if (!item || item.status === 'PROCESSING') return;
+    if (!item || item.status === 'PROCESSING' || item.status === 'DONE') return;
 
     if (!PayrollDB.getConfig().geminiApiKey) {
       const entered = prompt('🔑 เครื่องนี้ยังไม่ได้ใส่ Gemini API Key\nกรุณาวาง Gemini API Key ของคุณที่นี่ (ใส่ครั้งเดียวระบบจะซิงค์ให้ทุกเครื่องอัตโนมัติ):');
@@ -958,9 +972,10 @@
       }
     }
 
+    activeProcessingQueueIds.add(queueId);
     item.status = 'PROCESSING';
     item.errorMsg = '';
-    PayrollDB.upsertQueueItem(item, true);
+    PayrollDB.upsertQueueItem(item, false);
     renderQueueList();
 
     try {
@@ -976,19 +991,29 @@
       item.errorMsg = err.message || 'เกิดข้อผิดพลาดในการอ่านรูปใบงาน';
       PayrollDB.upsertQueueItem(item, true);
       renderQueueList();
+    } finally {
+      activeProcessingQueueIds.delete(queueId);
     }
   }
 
   async function processAllPendingQueue() {
     const queueItems = PayrollDB.getQueueItems();
-    const pending = queueItems.filter(q => q.status === 'PENDING' || q.status === 'ERROR');
-    if (pending.length === 0) {
+    const pendingOrError = queueItems.filter(q => q.status === 'PENDING' || q.status === 'ERROR');
+    if (pendingOrError.length === 0) {
+      if (isAutoScanDraining) {
+        return;
+      }
       alert('ไม่มีรายการที่รออ่านในคิว');
       return;
     }
-    for (const item of pending) {
-      await processQueueItem(item.id);
-    }
+    pendingOrError.forEach(q => {
+      if (q.status === 'ERROR') {
+        q.status = 'PENDING';
+        q.errorMsg = '';
+      }
+    });
+    renderQueueList();
+    await drainAutoScanQueue();
   }
 
   function renderQueueList() {
