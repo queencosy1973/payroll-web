@@ -1743,15 +1743,75 @@ ${workerContext}
     }
   }
 
+  function isContinuationSheetOfExisting(existingSheet, newSheet) {
+    const exItems = Array.isArray(existingSheet?.items) ? existingSheet.items : [];
+    const newItems = Array.isArray(newSheet?.items) ? newSheet.items : [];
+    if (exItems.length < 15 || newItems.length === 0) return false;
+    if (existingSheet.imageDataUrl && newSheet.imageDataUrl && existingSheet.imageDataUrl === newSheet.imageDataUrl) {
+      return false;
+    }
+    const rowSig = (it) => `${String(it.matchedSku || it.rawModel || '').toLowerCase()}|${String(it.color || '').toLowerCase()}|${it.qty || 1}`;
+    const exSigs = exItems.map(rowSig);
+    const newSigs = newItems.map(rowSig);
+
+    // Check if newItems are already appended at the tail of exItems
+    if (exSigs.length >= newSigs.length) {
+      const tailSlice = exSigs.slice(exSigs.length - newSigs.length);
+      let tailMatches = 0;
+      for (let i = 0; i < newSigs.length; i++) {
+        if (tailSlice[i] === newSigs[i]) tailMatches++;
+      }
+      if (tailMatches / newSigs.length >= 0.7) return false;
+    }
+
+    // If same length and >= 65% positional match, it's a duplicate scan of the same page
+    if (exSigs.length === newSigs.length) {
+      let posMatches = 0;
+      for (let i = 0; i < newSigs.length; i++) {
+        if (exSigs[i] === newSigs[i]) posMatches++;
+      }
+      if (posMatches / newSigs.length >= 0.65) return false;
+    }
+
+    return true;
+  }
+
   function upsertSheet(sheetObj, skipCloudPush = false) {
     if (!sheetObj || !sheetObj.id) return;
-    // Recalculate totals before saving
     const skuList = getSkuMappings();
+    const all = getSavedSheets();
+    let idx = all.findIndex(s => s.id === sheetObj.id);
+
+    // Enforce 1 Sheet per 1 Worker per 1 Date:
+    // - If it's a continuation page (แผ่นที่ 2+, when Page 1 has >=15 rows and different items), auto-append items onto Page 1!
+    // - If it's an accidental duplicate scan of the same page, update Page 1 in place without duplicating!
+    const incomingWdKey = getSheetWorkerDayKey(sheetObj);
+    if (idx < 0 && incomingWdKey) {
+      const sameWorkerDayIdx = all.findIndex(s => getSheetWorkerDayKey(s) === incomingWdKey);
+      if (sameWorkerDayIdx >= 0) {
+        const existingSheet = all[sameWorkerDayIdx];
+        idx = sameWorkerDayIdx;
+        sheetObj.id = existingSheet.id;
+        sheetObj.createdAt = existingSheet.createdAt || sheetObj.createdAt;
+        if (isContinuationSheetOfExisting(existingSheet, sheetObj)) {
+          sheetObj.items = [...(existingSheet.items || []), ...(sheetObj.items || [])].map((it, i) => ({
+            ...it,
+            rowNo: i + 1
+          }));
+          if (existingSheet.imageDataUrl) {
+            sheetObj.imageDataUrl = existingSheet.imageDataUrl;
+          }
+        }
+      }
+    }
+
+    // Recalculate totals before saving
     const dept = sheetObj.workerDept || 'หุ้ม';
     let sheetTotalUnits = 0;
     let sheetTotalWage = 0;
 
-    (sheetObj.items || []).forEach(item => {
+    (sheetObj.items || []).forEach((item, i) => {
+      item.rowNo = i + 1;
       const skuInfo = skuList.find(s => s.model.toLowerCase() === String(item.matchedSku || '').toLowerCase());
       if (skuInfo) {
         item.skuName = skuInfo.name;
@@ -1771,23 +1831,16 @@ ${workerContext}
     sheetObj.totalWage = sheetTotalWage;
     sheetObj.updatedAt = new Date().toISOString();
 
-    const all = getSavedSheets();
-    let idx = all.findIndex(s => s.id === sheetObj.id);
-
-    // Enforce 1 Sheet per 1 Worker per 1 Date: if a sheet for the same (sheetDate, workerCode) already exists, update that sheet instead of creating a duplicate!
-    const incomingWdKey = getSheetWorkerDayKey(sheetObj);
-    if (idx < 0 && incomingWdKey) {
-      const sameWorkerDayIdx = all.findIndex(s => getSheetWorkerDayKey(s) === incomingWdKey);
-      if (sameWorkerDayIdx >= 0) {
-        idx = sameWorkerDayIdx;
-        sheetObj.id = all[sameWorkerDayIdx].id;
-        sheetObj.createdAt = all[sameWorkerDayIdx].createdAt || sheetObj.createdAt;
-      }
-    }
-
     if (idx >= 0) {
       if (!sheetObj.imageDataUrl && all[idx].imageDataUrl) {
         sheetObj.imageDataUrl = all[idx].imageDataUrl;
+      } else if (
+        sheetObj.imageDataUrl &&
+        all[idx].imageDataUrl &&
+        sheetObj.imageDataUrl !== all[idx].imageDataUrl
+      ) {
+        // Re-upload updated/stitched image to QC_PAYROLL_IMAGE
+        uploadedImageIds.delete(sheetObj.id);
       }
       all[idx] = sheetObj;
       // Also remove any other sheet that now collides on (sheetDate, workerCode) if the user changed worker or date

@@ -956,6 +956,42 @@
     });
   }
 
+  function stitchImagesVertically(topDataUrl, bottomDataUrl, targetWidth = 1000, quality = 0.68) {
+    if (!topDataUrl || !topDataUrl.startsWith('data:image')) return Promise.resolve(bottomDataUrl || '');
+    if (!bottomDataUrl || !bottomDataUrl.startsWith('data:image')) return Promise.resolve(topDataUrl);
+    return new Promise((resolve) => {
+      const imgTop = new Image();
+      const imgBot = new Image();
+      let loaded = 0;
+      const onBothLoaded = () => {
+        loaded++;
+        if (loaded < 2) return;
+        try {
+          const w = targetWidth;
+          const hTop = Math.round((imgTop.height * w) / (imgTop.width || w));
+          const hBot = Math.round((imgBot.height * w) / (imgBot.width || w));
+          const c = document.createElement('canvas');
+          c.width = w;
+          c.height = hTop + hBot + 8;
+          const ctx = c.getContext('2d');
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(0, 0, c.width, c.height);
+          ctx.drawImage(imgTop, 0, 0, w, hTop);
+          ctx.drawImage(imgBot, 0, hTop + 8, w, hBot);
+          resolve(c.toDataURL('image/jpeg', quality));
+        } catch (e) {
+          resolve(topDataUrl);
+        }
+      };
+      imgTop.onload = onBothLoaded;
+      imgTop.onerror = () => resolve(bottomDataUrl);
+      imgBot.onload = onBothLoaded;
+      imgBot.onerror = () => resolve(topDataUrl);
+      imgTop.src = topDataUrl;
+      imgBot.src = bottomDataUrl;
+    });
+  }
+
   async function processQueueItem(queueId) {
     if (!queueId || activeProcessingQueueIds.has(queueId)) return;
     const queueItems = PayrollDB.getQueueItems();
@@ -1269,7 +1305,74 @@
       });
     }
 
-    // Add Row & Save Verified Sheet
+    // Add Row, Append Continuation Sheet (Page 2+) & Save Verified Sheet
+    const inputAppendCont = document.getElementById('input-append-continuation-sheet');
+    const lblAppendCont = document.getElementById('lbl-append-continuation-sheet');
+    if (inputAppendCont) {
+      inputAppendCont.addEventListener('change', async (e) => {
+        const files = Array.from(e.target.files || []).filter(f => f.type.startsWith('image/'));
+        if (files.length === 0) return;
+        const sheet = getActiveSheet();
+        if (!sheet) {
+          inputAppendCont.value = '';
+          return;
+        }
+
+        syncReviewTableToSheetObject(sheet);
+        if (!sheet.imageDataUrl && typeof PayrollDB.fetchSheetImage === 'function') {
+          await PayrollDB.fetchSheetImage(sheet.id);
+        }
+
+        const origHtml = lblAppendCont ? lblAppendCont.innerHTML : '';
+        if (lblAppendCont) {
+          lblAppendCont.classList.add('opacity-60', 'pointer-events-none');
+          lblAppendCont.innerHTML = '<span>⏳ AI กำลังอ่านใบต่อแล้วนำมาต่อท้าย...</span>';
+        }
+
+        let addedRowsCount = 0;
+        try {
+          for (const file of files) {
+            const rawUrl = await new Promise((res, rej) => {
+              const r = new FileReader();
+              r.onload = (ev) => res(ev.target.result);
+              r.onerror = rej;
+              r.readAsDataURL(file);
+            });
+            const resizedUrl = await resizeImageDataUrl(rawUrl, 1050, 0.68);
+            const parsedCont = await PayrollDB.analyzeJobSheetWithGemini(resizedUrl);
+            const contItems = Array.isArray(parsedCont.items) ? parsedCont.items : [];
+            if (contItems.length > 0) {
+              contItems.forEach((it) => {
+                sheet.items.push({
+                  ...it,
+                  rowNo: sheet.items.length + 1
+                });
+              });
+              addedRowsCount += contItems.length;
+            }
+            if (sheet.imageDataUrl && sheet.imageDataUrl.startsWith('data:image')) {
+              sheet.imageDataUrl = await stitchImagesVertically(sheet.imageDataUrl, resizedUrl, 1000, 0.66);
+            } else {
+              sheet.imageDataUrl = resizedUrl;
+            }
+            sheet.hasCloudImage = true;
+          }
+
+          PayrollDB.upsertSheet(sheet);
+          refreshAllViews();
+          alert(`✅ สแกนเพิ่มใบต่อสำเร็จ!\n- เพิ่มรายการต่อท้ายอีก: ${addedRowsCount} แถว\n- รวมใบงานนี้ทั้งหมด: ${sheet.items.length} แถว (${sheet.totalUnits} ชิ้น = ${sheet.totalWage.toLocaleString()} บาท)`);
+        } catch (err) {
+          alert(`❌ ไม่สามารถอ่านใบต่อได้: ${err.message || err}`);
+        } finally {
+          if (lblAppendCont) {
+            lblAppendCont.classList.remove('opacity-60', 'pointer-events-none');
+            lblAppendCont.innerHTML = origHtml || '<span>➕ สแกนเพิ่มใบต่อ (แผ่นที่ 2+)</span>';
+          }
+          inputAppendCont.value = '';
+        }
+      });
+    }
+
     const btnAddRow = document.getElementById('btn-add-review-item');
     if (btnAddRow) {
       btnAddRow.addEventListener('click', () => {

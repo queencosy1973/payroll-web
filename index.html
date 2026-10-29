@@ -554,13 +554,19 @@
               </button>
             </div>
 
-            <!-- Items Table -->
+              <!-- Items Table -->
             <div>
-              <div class="flex items-center justify-between mb-2">
+              <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
                 <h4 class="font-black text-xs sm:text-sm text-slate-800">รายการผลิตในใบงาน (คลิกแก้ไขหรือกด 📌 เพื่อจำคำย่อใหม่เข้า SKU จริง)</h4>
-                <button type="button" id="btn-add-review-item" class="px-3 py-1 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-lg cursor-pointer">
-                  + เพิ่มแถวรายการ
-                </button>
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <label id="lbl-append-continuation-sheet" for="input-append-continuation-sheet" class="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-lg shadow-sm cursor-pointer flex items-center gap-1 transition" title="ใช้เมื่อช่างเขียนใบงานเกิน 20 แถว (แผ่นที่ 2+) ระบบจะให้ AI อ่านแผ่นที่ 2 แล้วนำรายการมาต่อท้ายเป็นแถวที่ 21+ พร้อมต่อรูปภาพให้ในใบเดียว">
+                    <span>➕ สแกนเพิ่มใบต่อ (แผ่นที่ 2+)</span>
+                  </label>
+                  <input type="file" id="input-append-continuation-sheet" accept="image/*" multiple class="hidden">
+                  <button type="button" id="btn-add-review-item" class="px-3 py-1 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-lg cursor-pointer">
+                    + เพิ่มแถวรายการ
+                  </button>
+                </div>
               </div>
               <div class="overflow-x-auto border border-slate-200 rounded-xl max-h-[360px] overflow-y-auto">
                 <table class="w-full text-left border-collapse text-xs">
@@ -978,7 +984,7 @@
   </div>
 
   <!-- Scripts -->
-  <script src="payroll-db.js?v=2.2"></script>
-  <script src="app.js?v=2.2"></script>
+  <script src="payroll-db.js?v=2.3"></script>
+  <script src="app.js?v=2.3"></script>
 </body>
 </html>
