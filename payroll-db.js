@@ -1097,8 +1097,8 @@ ${skuContext}
 ${workerContext}
 
 3. วันที่ (มุมบนขวา "วันที่..."):
-   - ในใบงานมักเขียนเป็น วัน.เดือน.ปีพ.ศ.2หลัก เช่น "15.6.69" (ปี 69 คือ พ.ศ. 2569 = ค.ศ. 2026)
-   - แปลงเป็นรูปแบบ YYYY-MM-DD (เช่น "2026-06-15")
+   - ช่างอาจเขียนปีเป็น พ.ศ. (เช่น "15.6.69" หรือ "15/6/2569" ซึ่งปี 69/2569 = ค.ศ. 2026) หรือเขียนเป็น ค.ศ. (เช่น "15.6.26" หรือ "15/6/2026" ซึ่งคือ ค.ศ. 2026 อยู่แล้ว ห้ามนำ 2026 หรือ 26 ไปลบ 543 เด็ดขาด!)
+   - แปลงเป็นรูปแบบ YYYY-MM-DD (ค.ศ. 2026 เสมอ เช่น "2026-06-15")
 
 4. หมายเหตุพิเศษกลางหน้ากระดาษ:
    - หากมีข้อความเขียนหมายเหตุในตาราง เช่น "เอาไปรวมยอด 16-30 มิ.ย. 69 เนื่องจากส่งใบงานล่าช้า" ให้ดึงมาใส่ในฟิลด์ specialNote และตั้งค่า isLateCarryOver = true
@@ -1202,23 +1202,28 @@ ${workerContext}
 
     let isoDate = aiData.isoDate || '';
     if (aiData.rawDate) {
-      // Parse D.M.YY (e.g. 15.6.69 -> 2026-06-15) — prefer rawDate over AI isoDate when handwritten Thai year 69 is misread as 67
+      // Parse D.M.YY or D.M.YYYY — supports BOTH Buddhist Era (69 / 2569) AND Christian Era (26 / 2026)
       const dmY = String(aiData.rawDate).trim().match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
       if (dmY) {
         const d = String(dmY[1]).padStart(2, '0');
         const m = String(dmY[2]).padStart(2, '0');
         let y = parseInt(dmY[3], 10);
-        if (y < 100) y = (y + 2500) - 543;
-        else if (y > 2400) y = y - 543;
-        if (y >= 2020 && y < 2026) y = 2026;
+        if (y < 100) {
+          // 2-digit year: 60..99 is Buddhist Era (e.g. 69 -> 2569 -> 2026), 00..59 is Christian Era (e.g. 26 -> 2026)
+          y = y >= 60 ? (y + 2500) - 543 : 2000 + y;
+        } else if (y >= 2400) {
+          // 4-digit Buddhist Era (e.g. 2569 -> 2026)
+          y = y - 543;
+        }
+        if (y < 2026 || y > 2028) y = 2026;
         isoDate = `${y}-${m}-${d}`;
       }
     }
     if (/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
-      const yr = parseInt(isoDate.slice(0, 4), 10);
-      if (yr >= 2020 && yr < 2026) {
-        isoDate = `2026-${isoDate.slice(5)}`;
-      }
+      let yr = parseInt(isoDate.slice(0, 4), 10);
+      if (yr >= 2400) yr = yr - 543;
+      if (yr < 2026 || yr > 2028) yr = 2026;
+      isoDate = `${yr}-${isoDate.slice(5)}`;
     } else {
       isoDate = new Date().toISOString().slice(0, 10);
     }
@@ -1640,8 +1645,28 @@ ${workerContext}
   // SAVED JOB SHEETS STORAGE & PAYROLL AGGREGATION (LOCAL + CLOUD SYNCED)
   // Rule: 1 Job Sheet per 1 Worker per 1 Date (1 ใบงาน = 1 ชื่อช่าง ต่อ 1 วัน)
   // ===========================================================================
+  function normalizeSheetYearInPlace(s) {
+    if (!s || s.isDemo) return;
+    if (s.sheetDate && /^\d{4}-\d{2}-\d{2}$/.test(s.sheetDate)) {
+      let yr = parseInt(s.sheetDate.slice(0, 4), 10);
+      if (yr >= 2400) yr = yr - 543;
+      if (yr < 2026 || yr > 2028) {
+        s.sheetDate = `2026-${s.sheetDate.slice(5)}`;
+        const baseP = calculatePayrollPeriod(s.sheetDate);
+        s.payrollPeriodKey = s.isLateCarryOver ? getNextPayrollPeriodKey(baseP.periodKey) : baseP.periodKey;
+      }
+    }
+    if (s.payrollPeriodKey && /^(\d{4})-(\d{2})-(P1|P2)$/.test(s.payrollPeriodKey)) {
+      const pYr = parseInt(s.payrollPeriodKey.slice(0, 4), 10);
+      if (pYr < 2026 || pYr > 2028) {
+        s.payrollPeriodKey = `2026-${s.payrollPeriodKey.slice(5)}`;
+      }
+    }
+  }
+
   function getSheetWorkerDayKey(sheet) {
     if (!sheet || sheet.isDemo) return '';
+    normalizeSheetYearInPlace(sheet);
     const dt = String(sheet.sheetDate || '').trim();
     const wKey = String(sheet.workerCode || sheet.workerName || '').trim().toLowerCase();
     if (!dt || !wKey || wKey === 'ไม่ระบุช่าง') return '';
