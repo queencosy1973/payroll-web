@@ -1159,7 +1159,15 @@
   // TAB 3: SIDE-BY-SIDE REVIEW & VERIFY WORKSPACE
   // ===========================================================================
   function initReviewWorkspaceUI() {
+    const filterReviewDate = document.getElementById('filter-review-date');
+    const filterReviewDatePicker = document.getElementById('filter-review-date-picker');
+    const btnDateYesterday = document.getElementById('btn-review-date-yesterday');
+    const btnDateToday = document.getElementById('btn-review-date-today');
+    const btnFilterReset = document.getElementById('btn-review-filter-reset');
+    const filterReviewWorker = document.getElementById('filter-review-worker');
     const filterReviewStatus = document.getElementById('filter-review-status');
+    const filterReviewSort = document.getElementById('filter-review-sort');
+    const btnExportReportExcel = document.getElementById('btn-export-review-report-excel');
     const selectSheet = document.getElementById('select-review-sheet');
     const btnPrev = document.getElementById('btn-prev-sheet');
     const btnNext = document.getElementById('btn-next-sheet');
@@ -1177,14 +1185,87 @@
     if (btnRotate) btnRotate.addEventListener('click', () => { imgRotation = (imgRotation + 90) % 360; applyImageTransform(); });
     if (btnResetImg) btnResetImg.addEventListener('click', () => { imgZoom = 1; imgRotation = 0; applyImageTransform(); });
 
-    if (filterReviewStatus) {
-      filterReviewStatus.addEventListener('change', () => {
-        const filtered = getFilteredReviewSheets();
-        if (filtered.length > 0 && !filtered.some(s => s.id === activeSheetId)) {
-          activeSheetId = filtered[0].id;
+    const onReviewFilterOrSortChanged = () => {
+      const filtered = getFilteredReviewSheets();
+      if (filtered.length > 0 && !filtered.some(s => s.id === activeSheetId)) {
+        activeSheetId = filtered[0].id;
+      }
+      renderReviewSelectorAndWorkspace();
+    };
+
+    if (filterReviewDate) {
+      filterReviewDate.addEventListener('change', () => {
+        if (filterReviewDatePicker) {
+          filterReviewDatePicker.value = filterReviewDate.value === 'ALL' ? '' : filterReviewDate.value;
         }
-        renderReviewSelectorAndWorkspace();
+        onReviewFilterOrSortChanged();
       });
+    }
+
+    if (filterReviewDatePicker) {
+      filterReviewDatePicker.addEventListener('change', () => {
+        const picked = filterReviewDatePicker.value;
+        if (filterReviewDate) {
+          if (!picked) {
+            filterReviewDate.value = 'ALL';
+          } else {
+            populateReviewFilterDropdowns(picked);
+            filterReviewDate.value = picked;
+          }
+        }
+        onReviewFilterOrSortChanged();
+      });
+    }
+
+    if (btnDateYesterday) {
+      btnDateYesterday.addEventListener('click', () => {
+        const allDates = getDistinctSheetDates();
+        const yesterdayIso = getLocalIsoDateOffset(-1);
+        const todayIso = getLocalIsoDateOffset(0);
+        let targetDate = yesterdayIso;
+        if (!allDates.includes(yesterdayIso) && allDates.length > 0) {
+          // If no sheet on literal yesterday, pick the previous scanned working date (or latest date)
+          if (allDates[0] === todayIso && allDates.length > 1) {
+            targetDate = allDates[1];
+          } else {
+            targetDate = allDates[0];
+          }
+        }
+        populateReviewFilterDropdowns(targetDate);
+        if (filterReviewDate) filterReviewDate.value = targetDate;
+        if (filterReviewDatePicker) filterReviewDatePicker.value = targetDate;
+        onReviewFilterOrSortChanged();
+      });
+    }
+
+    if (btnDateToday) {
+      btnDateToday.addEventListener('click', () => {
+        const allDates = getDistinctSheetDates();
+        const todayIso = getLocalIsoDateOffset(0);
+        const targetDate = allDates.includes(todayIso) ? todayIso : (allDates[0] || todayIso);
+        populateReviewFilterDropdowns(targetDate);
+        if (filterReviewDate) filterReviewDate.value = targetDate;
+        if (filterReviewDatePicker) filterReviewDatePicker.value = targetDate;
+        onReviewFilterOrSortChanged();
+      });
+    }
+
+    if (btnFilterReset) {
+      btnFilterReset.addEventListener('click', () => {
+        if (filterReviewDate) filterReviewDate.value = 'ALL';
+        if (filterReviewDatePicker) filterReviewDatePicker.value = '';
+        if (filterReviewWorker) filterReviewWorker.value = 'ALL';
+        if (filterReviewStatus) filterReviewStatus.value = 'ALL';
+        onReviewFilterOrSortChanged();
+      });
+    }
+
+    [filterReviewWorker, filterReviewStatus, filterReviewSort].forEach(el => {
+      if (el) el.addEventListener('change', onReviewFilterOrSortChanged);
+    });
+
+    if (btnExportReportExcel) {
+      btnExportReportExcel.addEventListener('click', exportReviewFilteredReportExcel);
     }
 
     if (selectSheet) {
@@ -1516,12 +1597,133 @@
     }
   }
 
+  function getLocalIsoDateOffset(daysOffset = 0) {
+    const d = new Date();
+    d.setDate(d.getDate() + daysOffset);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function getDistinctSheetDates(sheetsOverride) {
+    const list = sheetsOverride || PayrollDB.getSavedSheets().filter(s => !s.isDemo);
+    return Array.from(new Set(list.map(s => s.sheetDate).filter(Boolean))).sort().reverse();
+  }
+
+  function formatThaiSheetDateLabel(isoDateStr) {
+    if (!isoDateStr || !/^\d{4}-\d{2}-\d{2}$/.test(isoDateStr)) return isoDateStr || '-';
+    const [yyyy, mm, dd] = isoDateStr.split('-').map(Number);
+    const thaiMonths = ['', 'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+    const beShort = String(yyyy + 543).slice(-2);
+    return `${isoDateStr} (${dd} ${thaiMonths[mm] || mm} ${beShort})`;
+  }
+
+  function sortSheetsList(sheets, sortMode = 'DATE_DESC') {
+    const arr = (sheets || []).slice();
+    return arr.sort((a, b) => {
+      const dateA = a.sheetDate || '';
+      const dateB = b.sheetDate || '';
+      const nameA = `${a.workerName || ''} ${a.workerCode || ''}`;
+      const nameB = `${b.workerName || ''} ${b.workerCode || ''}`;
+      const createdA = a.createdAt || '';
+      const createdB = b.createdAt || '';
+      if (sortMode === 'DATE_ASC') {
+        if (dateA !== dateB) return dateA.localeCompare(dateB);
+        return nameA.localeCompare(nameB, 'th');
+      }
+      if (sortMode === 'WORKER_ASC') {
+        const cmp = nameA.localeCompare(nameB, 'th');
+        if (cmp !== 0) return cmp;
+        return dateB.localeCompare(dateA);
+      }
+      if (sortMode === 'SCAN_DESC') {
+        if (createdA !== createdB) return createdB.localeCompare(createdA);
+        return dateB.localeCompare(dateA);
+      }
+      if (sortMode === 'WAGE_DESC') {
+        const wageDiff = (b.totalWage || 0) - (a.totalWage || 0);
+        if (wageDiff !== 0) return wageDiff;
+        return dateB.localeCompare(dateA);
+      }
+      // Default: DATE_DESC (newest sheetDate first, then worker name)
+      if (dateA !== dateB) return dateB.localeCompare(dateA);
+      return nameA.localeCompare(nameB, 'th');
+    });
+  }
+
+  function populateReviewFilterDropdowns(forceDateValue) {
+    const allSheets = PayrollDB.getSavedSheets().filter(s => !s.isDemo);
+    const filterDateEl = document.getElementById('filter-review-date');
+    const filterDatePicker = document.getElementById('filter-review-date-picker');
+    const filterWorkerEl = document.getElementById('filter-review-worker');
+
+    const dateCountMap = new Map();
+    allSheets.forEach(s => {
+      if (!s.sheetDate) return;
+      dateCountMap.set(s.sheetDate, (dateCountMap.get(s.sheetDate) || 0) + 1);
+    });
+    const sortedDates = Array.from(dateCountMap.keys()).sort().reverse();
+    const currDateVal = forceDateValue !== undefined ? forceDateValue : (filterDateEl ? filterDateEl.value : 'ALL');
+    if (currDateVal && currDateVal !== 'ALL' && !sortedDates.includes(currDateVal)) {
+      sortedDates.unshift(currDateVal);
+    }
+
+    if (filterDateEl) {
+      filterDateEl.innerHTML = [
+        `<option value="ALL" ${currDateVal === 'ALL' ? 'selected' : ''}>📅 ทุกวันที่รวมกัน (${allSheets.length} ใบงาน)</option>`,
+        ...sortedDates.map(d => {
+          const cnt = dateCountMap.get(d) || 0;
+          return `<option value="${escapeHtml(d)}" ${d === currDateVal ? 'selected' : ''}>📅 ${escapeHtml(formatThaiSheetDateLabel(d))} — ${cnt} ใบงาน</option>`;
+        })
+      ].join('');
+    }
+    if (filterDatePicker && forceDateValue !== undefined) {
+      filterDatePicker.value = forceDateValue === 'ALL' ? '' : forceDateValue;
+    }
+
+    // Populate Worker dropdown with counts scoped by active date filter
+    if (filterWorkerEl) {
+      const currWorkerVal = filterWorkerEl.value || 'ALL';
+      const activeDateVal = filterDateEl ? filterDateEl.value : 'ALL';
+      const dateScopedSheets = activeDateVal === 'ALL'
+        ? allSheets
+        : allSheets.filter(s => s.sheetDate === activeDateVal);
+
+      const workerCountMap = new Map();
+      dateScopedSheets.forEach(s => {
+        const key = s.workerCode || s.workerName || '';
+        if (!key) return;
+        workerCountMap.set(key, (workerCountMap.get(key) || 0) + 1);
+      });
+
+      const workers = PayrollDB.getWorkerMappings().slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'th'));
+      filterWorkerEl.innerHTML = [
+        `<option value="ALL" ${currWorkerVal === 'ALL' ? 'selected' : ''}>👷 ช่างทุกคนรวมกัน (${dateScopedSheets.length} ใบงาน)</option>`,
+        ...workers.map(w => {
+          const cnt = workerCountMap.get(w.code) || 0;
+          const cntBadge = cnt > 0 ? `✅ ${cnt} ใบ` : '0 ใบ';
+          return `<option value="${escapeHtml(w.code)}" ${w.code === currWorkerVal ? 'selected' : ''}>👷 ${escapeHtml(w.name)} (${escapeHtml(w.code)} - ${escapeHtml(w.dept)}) [${cntBadge}]</option>`;
+        })
+      ].join('');
+    }
+  }
+
   function getFilteredReviewSheets() {
     const all = PayrollDB.getSavedSheets();
-    const filterEl = document.getElementById('filter-review-status');
-    const statusFilter = filterEl ? filterEl.value : 'ALL';
-    if (!statusFilter || statusFilter === 'ALL') return all;
-    return all.filter(s => (s.status || 'ADMIN_VERIFIED') === statusFilter);
+    const dateVal = document.getElementById('filter-review-date')?.value || 'ALL';
+    const workerVal = document.getElementById('filter-review-worker')?.value || 'ALL';
+    const statusFilter = document.getElementById('filter-review-status')?.value || 'ALL';
+    const sortMode = document.getElementById('filter-review-sort')?.value || 'DATE_DESC';
+
+    const filtered = all.filter(s => {
+      if (dateVal !== 'ALL' && s.sheetDate !== dateVal) return false;
+      if (workerVal !== 'ALL' && s.workerCode !== workerVal && s.workerName !== workerVal) return false;
+      if (statusFilter !== 'ALL' && (s.status || 'ADMIN_VERIFIED') !== statusFilter) return false;
+      return true;
+    });
+
+    return sortSheetsList(filtered, sortMode);
   }
 
   function getActiveSheet() {
@@ -1573,6 +1775,7 @@
   }
 
   function renderReviewSelectorAndWorkspace() {
+    populateReviewFilterDropdowns();
     const allSheets = PayrollDB.getSavedSheets();
     const sheets = getFilteredReviewSheets();
     const selectSheet = document.getElementById('select-review-sheet');
@@ -1584,6 +1787,7 @@
       if (selectSheet) selectSheet.innerHTML = `<option value="">-- ยังไม่มีใบงาน --</option>`;
       if (emptyState) emptyState.classList.remove('hidden');
       if (workspace) workspace.classList.add('hidden');
+      renderReviewDailyReportTable();
       return;
     }
 
@@ -1593,11 +1797,15 @@
 
     const listForSelect = sheets.length > 0 ? sheets : allSheets;
     if (selectSheet) {
-      selectSheet.innerHTML = listForSelect.map((s, i) => {
-        const pMeta = PayrollDB.getPeriodMetaFromKey(s.payrollPeriodKey);
-        const stMeta = getStatusBadgeMeta(s.status);
-        return `<option value="${s.id}" ${s.id === sheet.id ? 'selected' : ''}>${stMeta.shortIcon} ใบที่ ${i + 1}: ${s.workerName} (${s.sheetDate}) - ${s.totalUnits || 0} ชิ้น / ${(s.totalWage || 0).toLocaleString()}฿ [${pMeta.periodLabel}]</option>`;
-      }).join('');
+      if (sheets.length === 0) {
+        selectSheet.innerHTML = `<option value="">-- ไม่พบใบงานที่ตรงกับวันที่/ช่างที่เลือก (กำลังแสดงใบล่าสุด) --</option>`;
+      } else {
+        selectSheet.innerHTML = listForSelect.map((s, i) => {
+          const pMeta = PayrollDB.getPeriodMetaFromKey(s.payrollPeriodKey);
+          const stMeta = getStatusBadgeMeta(s.status);
+          return `<option value="${s.id}" ${s.id === sheet.id ? 'selected' : ''}>${stMeta.shortIcon} ใบที่ ${i + 1}: ${s.workerName} (${s.sheetDate}) - ${s.totalUnits || 0} ชิ้น / ${(s.totalWage || 0).toLocaleString()}฿ [${pMeta.periodLabel}]</option>`;
+        }).join('');
+      }
     }
 
     if (statusBadge && sheet) {
@@ -1826,6 +2034,275 @@
     const totalWageEl = document.getElementById('review-total-wage');
     if (totalUnitsEl) totalUnitsEl.textContent = String(sheet.totalUnits || 0);
     if (totalWageEl) totalWageEl.textContent = (sheet.totalWage || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 });
+
+    renderReviewDailyReportTable();
+  }
+
+  function renderReviewDailyReportTable() {
+    const tbody = document.getElementById('tbody-review-report-list');
+    const summaryEl = document.getElementById('review-report-filter-summary');
+    const kpiPillEl = document.getElementById('review-report-kpi-pill');
+    const workerCheckBox = document.getElementById('review-daily-worker-check');
+    if (!tbody) return;
+
+    const allSheets = PayrollDB.getSavedSheets().filter(s => !s.isDemo);
+    const filtered = getFilteredReviewSheets().filter(s => !s.isDemo);
+    const dateVal = document.getElementById('filter-review-date')?.value || 'ALL';
+    const workerVal = document.getElementById('filter-review-worker')?.value || 'ALL';
+    const workers = PayrollDB.getWorkerMappings();
+
+    const dateLabel = dateVal === 'ALL' ? 'ทุกวันที่รวมกัน' : formatThaiSheetDateLabel(dateVal);
+    const workerObj = workers.find(w => w.code === workerVal);
+    const workerLabel = workerVal === 'ALL' ? 'ช่างทุกคน' : `${workerObj ? workerObj.name : workerVal} (${workerVal})`;
+
+    if (summaryEl) {
+      summaryEl.textContent = `📅 ${dateLabel} • 👷 ${workerLabel}`;
+    }
+
+    const totalUnits = filtered.reduce((acc, s) => acc + (s.totalUnits || 0), 0);
+    const totalWage = filtered.reduce((acc, s) => acc + (s.totalWage || 0), 0);
+    if (kpiPillEl) {
+      kpiPillEl.textContent = `พบ ${filtered.length} ใบงาน • รวม ${totalUnits.toLocaleString()} ชิ้น • ${totalWage.toLocaleString()} ฿`;
+    }
+
+    // Render Daily Worker Submission Check Box or Quick Recent Date Chips
+    if (workerCheckBox) {
+      workerCheckBox.classList.remove('hidden');
+      if (dateVal === 'ALL') {
+        // Show clickable recent dates bar so user can pick yesterday / any recent date with 1 click
+        const dateCounts = new Map();
+        allSheets.forEach(s => {
+          if (!s.sheetDate) return;
+          dateCounts.set(s.sheetDate, (dateCounts.get(s.sheetDate) || 0) + 1);
+        });
+        const recentDates = Array.from(dateCounts.keys()).sort().reverse().slice(0, 12);
+        const dateChipsHtml = recentDates.map(d => {
+          const cnt = dateCounts.get(d) || 0;
+          return `<button type="button" class="btn-quick-pick-report-date px-2.5 py-1 rounded-xl bg-white hover:bg-indigo-50 text-slate-800 hover:text-indigo-700 border border-slate-300 hover:border-indigo-300 font-bold text-[11px] shadow-xs transition cursor-pointer" data-date="${escapeHtml(d)}">📅 ${escapeHtml(formatThaiSheetDateLabel(d))} <span class="px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 font-black text-[10px] ml-1">${cnt} ใบ</span></button>`;
+        }).join('');
+        workerCheckBox.innerHTML = `
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <span class="font-black text-slate-800">🗓️ กดเลือกดูใบงานรายวันด่วน (เรียงจากวันที่ล่าสุด):</span>
+            <span class="text-[11px] text-slate-500">คลิกวันที่เพื่อดูรายชื่อช่างที่ส่งใบงานในวันนั้น</span>
+          </div>
+          <div class="flex items-center gap-1.5 flex-wrap pt-1">
+            ${dateChipsHtml || '<span class="text-slate-400">ยังไม่มีข้อมูลวันที่ใบงาน</span>'}
+          </div>
+        `;
+        workerCheckBox.querySelectorAll('.btn-quick-pick-report-date').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const d = btn.getAttribute('data-date') || 'ALL';
+            populateReviewFilterDropdowns(d);
+            const filterDateEl = document.getElementById('filter-review-date');
+            if (filterDateEl) filterDateEl.value = d;
+            const list = getFilteredReviewSheets();
+            if (list.length > 0) activeSheetId = list[0].id;
+            renderReviewSelectorAndWorkspace();
+          });
+        });
+      } else {
+        // Specific date selected -> show which workers submitted sheets on this date vs who hasn't
+        const sheetsOnDate = allSheets.filter(s => s.sheetDate === dateVal);
+        const submittedMap = new Map();
+        sheetsOnDate.forEach(s => {
+          const k = s.workerCode || s.workerName;
+          if (!submittedMap.has(k)) submittedMap.set(k, []);
+          submittedMap.get(k).push(s);
+        });
+
+        const submittedWorkers = [];
+        const missingWorkers = [];
+        workers.forEach(w => {
+          const wSheets = submittedMap.get(w.code) || [];
+          if (wSheets.length > 0) {
+            submittedWorkers.push({ worker: w, sheets: wSheets });
+          } else {
+            missingWorkers.push(w);
+          }
+        });
+
+        const submittedChips = submittedWorkers.map(({ worker, sheets: wSheets }) => {
+          const units = wSheets.reduce((a, x) => a + (x.totalUnits || 0), 0);
+          const wage = wSheets.reduce((a, x) => a + (x.totalWage || 0), 0);
+          const isSelectedWorker = workerVal === worker.code;
+          return `<button type="button" class="btn-quick-pick-report-worker px-2.5 py-1 rounded-xl font-bold text-[11px] border transition cursor-pointer ${
+            isSelectedWorker
+              ? 'bg-indigo-600 text-white border-indigo-700 shadow'
+              : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-950 border-emerald-300'
+          }" data-worker="${escapeHtml(worker.code)}" data-sheet-id="${escapeHtml(wSheets[0].id)}">✅ ${escapeHtml(worker.name)} (${escapeHtml(worker.code)}) • ${units} ชิ้น / ${wage.toLocaleString()}฿</button>`;
+        }).join('');
+
+        const missingChips = missingWorkers.map(w =>
+          `<span class="px-2 py-0.5 rounded-lg bg-white text-slate-500 border border-slate-200 text-[11px]">⚪ ${escapeHtml(w.name)} (${escapeHtml(w.code)}-${escapeHtml(w.dept)})</span>`
+        ).join('');
+
+        workerCheckBox.innerHTML = `
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <div class="font-black text-indigo-950">
+              📊 สรุปการส่งใบงานประจำวันที่ ${escapeHtml(formatThaiSheetDateLabel(dateVal))}:
+              <span class="text-emerald-700 ml-1">✅ มีใบงานแล้ว ${submittedWorkers.length} คน (${sheetsOnDate.length} ใบ)</span>
+              <span class="text-slate-500 ml-2">⚪ ยังไม่มีใบงาน ${missingWorkers.length} คน</span>
+            </div>
+            ${workerVal !== 'ALL' ? `<button type="button" id="btn-clear-worker-subfilter" class="px-2 py-0.5 rounded bg-indigo-100 hover:bg-indigo-200 text-indigo-800 font-bold text-[11px] cursor-pointer">แสดงช่างทุกคนในวันนี้</button>` : ''}
+          </div>
+          <div class="space-y-1.5 pt-1">
+            <div class="flex items-center gap-1.5 flex-wrap">
+              <span class="text-[11px] font-black text-emerald-800 shrink-0">คลิกชื่อช่างเพื่อเปิดดูใบงาน:</span>
+              ${submittedChips || '<span class="text-rose-600 font-bold">ไม่มีใบงานในวันที่เลือก</span>'}
+            </div>
+            ${missingWorkers.length > 0 ? `<div class="flex items-center gap-1.5 flex-wrap pt-1 border-t border-slate-200/80"><span class="text-[10px] font-bold text-slate-500 shrink-0">ช่างที่ไม่มีใบงานในวันนี้:</span>${missingChips}</div>` : ''}
+          </div>
+        `;
+
+        workerCheckBox.querySelectorAll('.btn-quick-pick-report-worker').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const wCode = btn.getAttribute('data-worker') || 'ALL';
+            const sheetId = btn.getAttribute('data-sheet-id');
+            const filterWorkerEl = document.getElementById('filter-review-worker');
+            if (filterWorkerEl) {
+              filterWorkerEl.value = (filterWorkerEl.value === wCode) ? 'ALL' : wCode;
+            }
+            if (sheetId) activeSheetId = sheetId;
+            renderReviewSelectorAndWorkspace();
+          });
+        });
+
+        workerCheckBox.querySelector('#btn-clear-worker-subfilter')?.addEventListener('click', () => {
+          const filterWorkerEl = document.getElementById('filter-review-worker');
+          if (filterWorkerEl) filterWorkerEl.value = 'ALL';
+          renderReviewSelectorAndWorkspace();
+        });
+      }
+    }
+
+    if (filtered.length === 0) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="10" class="py-8 text-center text-slate-400 font-bold">
+            ไม่พบใบงานที่ตรงกับตัวกรอง (${escapeHtml(dateLabel)} / ${escapeHtml(workerLabel)}) — กดปุ่ม "ทั้งหมด" ด้านบนเพื่อล้างตัวกรอง
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    tbody.innerHTML = filtered.map((s, idx) => {
+      const pMeta = PayrollDB.getPeriodMetaFromKey(s.payrollPeriodKey);
+      const stMeta = getStatusBadgeMeta(s.status);
+      const isCurrent = s.id === activeSheetId;
+      const deptPill = s.workerDept === 'เย็บ'
+        ? `<span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 font-black text-[10px]">🧵 เย็บ</span>`
+        : `<span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 font-black text-[10px]">🔨 หุ้ม</span>`;
+      const skuSummary = Array.from(new Set((s.items || []).map(it => (it.matchedSku || it.rawModel || '').toUpperCase()).filter(Boolean))).slice(0, 5).join(', ');
+
+      return `
+        <tr class="transition ${isCurrent ? 'bg-indigo-50/90 font-bold' : 'hover:bg-slate-50'}">
+          <td class="py-2.5 px-3 text-center font-mono font-bold text-slate-500">${idx + 1}</td>
+          <td class="py-2.5 px-3 font-mono font-bold text-slate-900 whitespace-nowrap">${escapeHtml(formatThaiSheetDateLabel(s.sheetDate))}</td>
+          <td class="py-2.5 px-3 text-slate-600 whitespace-nowrap">${escapeHtml(pMeta.periodLabel)}</td>
+          <td class="py-2.5 px-3 font-black text-slate-900 whitespace-nowrap">
+            ${escapeHtml(s.workerName || '-')} <span class="text-slate-500 font-mono text-[11px]">(${escapeHtml(s.workerCode || '-')})</span>
+          </td>
+          <td class="py-2.5 px-3 text-center whitespace-nowrap">${deptPill}</td>
+          <td class="py-2.5 px-3 text-center font-mono font-bold text-indigo-700 whitespace-nowrap">
+            ${(s.items || []).length} แถว / ${(s.totalUnits || 0).toLocaleString()} ชิ้น
+          </td>
+          <td class="py-2.5 px-3 text-right font-mono font-black text-emerald-700 whitespace-nowrap">
+            ${(s.totalWage || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+          </td>
+          <td class="py-2.5 px-3 text-[11px] font-mono text-slate-600 max-w-[200px] truncate" title="${escapeHtml(skuSummary)}">
+            ${escapeHtml(skuSummary || '-')}
+          </td>
+          <td class="py-2.5 px-3 text-center whitespace-nowrap">
+            <span class="${stMeta.cls}">${stMeta.label}</span>
+          </td>
+          <td class="py-2.5 px-3 text-center whitespace-nowrap">
+            <button type="button" class="btn-open-sheet-from-report px-3 py-1 rounded-lg font-black text-[11px] transition cursor-pointer ${
+              isCurrent
+                ? 'bg-indigo-700 text-white shadow'
+                : 'bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white border border-indigo-200'
+            }" data-sheet-id="${escapeHtml(s.id)}">
+              ${isCurrent ? '👁️ กำลังเปิดดู' : '🔍 เปิดดูใบงาน'}
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    tbody.querySelectorAll('.btn-open-sheet-from-report').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const targetId = btn.getAttribute('data-sheet-id');
+        if (!targetId) return;
+        activeSheetId = targetId;
+        renderReviewSelectorAndWorkspace();
+        const ws = document.getElementById('review-workspace');
+        if (ws) ws.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  }
+
+  function exportReviewFilteredReportExcel() {
+    if (typeof XLSX === 'undefined') {
+      alert('กำลังโหลดไลบรารี Excel กรุณาลองใหม่อีกครั้งครับ');
+      return;
+    }
+    const filtered = getFilteredReviewSheets().filter(s => !s.isDemo);
+    if (filtered.length === 0) {
+      alert('ไม่มีข้อมูลใบงานในตัวกรองปัจจุบันสำหรับส่งออก Excel ครับ');
+      return;
+    }
+
+    const summaryRows = filtered.map((s, idx) => {
+      const pMeta = PayrollDB.getPeriodMetaFromKey(s.payrollPeriodKey);
+      const stMeta = getStatusBadgeMeta(s.status);
+      const skuSummary = Array.from(new Set((s.items || []).map(it => (it.matchedSku || it.rawModel || '').toUpperCase()).filter(Boolean))).join(', ');
+      return {
+        'ลำดับ': idx + 1,
+        'วันที่ใบงาน': s.sheetDate || '',
+        'งวดจ่ายเงิน': pMeta.periodLabel,
+        'รหัสช่าง': s.workerCode || '',
+        'ชื่อช่าง': s.workerName || '',
+        'ชื่อตามลายมือ': s.rawWorkerName || '',
+        'แผนก': s.workerDept || '',
+        'จำนวนแถว': (s.items || []).length,
+        'รวมจำนวนชิ้น': s.totalUnits || 0,
+        'รวมค่าแรง (บาท)': s.totalWage || 0,
+        'รุ่นที่ผลิต': skuSummary,
+        'สถานะ': stMeta.label,
+        'หมายเหตุ': s.specialNote || ''
+      };
+    });
+
+    const detailRows = [];
+    filtered.forEach(s => {
+      (s.items || []).forEach((it, idx) => {
+        detailRows.push({
+          'วันที่ใบงาน': s.sheetDate || '',
+          'รหัสช่าง': s.workerCode || '',
+          'ชื่อช่าง': s.workerName || '',
+          'แผนก': s.workerDept || '',
+          'แถวที่': idx + 1,
+          'คำในใบงาน': it.rawModel || '',
+          'SKU โรงงาน': (it.matchedSku || '').toUpperCase(),
+          'สี/รหัสผ้า': it.color || '',
+          'จำนวนชิ้น': it.qty || 1,
+          'ค่าแรง/ชิ้น': it.unitRate || 0,
+          'รวมเป็นเงิน (บาท)': it.lineTotal || 0,
+          'พนง.แจกงาน': it.channel || '',
+          'รับเข้าสต็อก': it.stockReceiver || ''
+        });
+      });
+    });
+
+    const wb = XLSX.utils.book_new();
+    const ws1 = XLSX.utils.json_to_sheet(summaryRows);
+    const ws2 = XLSX.utils.json_to_sheet(detailRows);
+    XLSX.utils.book_append_sheet(wb, ws1, 'สรุปใบงานตามตัวกรอง');
+    XLSX.utils.book_append_sheet(wb, ws2, 'รายละเอียดรายแถว');
+
+    const dateVal = document.getElementById('filter-review-date')?.value || 'ALL';
+    const fileTag = dateVal === 'ALL' ? 'all-dates' : dateVal;
+    XLSX.writeFile(wb, `QueenCosy_Scanned_JobSheets_${fileTag}.xlsx`);
   }
 
   // ===========================================================================
@@ -2289,17 +2766,18 @@
   }
 
   function getFilteredApprovalSheets() {
-    const all = PayrollDB.getSavedSheets();
-    const filterPeriod = document.getElementById('filter-approval-period');
-    const filterStatus = document.getElementById('filter-approval-status');
-    const filterSearch = document.getElementById('filter-approval-search');
+    const all = PayrollDB.getSavedSheets().filter(s => !s.isDemo);
+    const periodVal = document.getElementById('filter-approval-period')?.value || 'ALL';
+    const dateVal = document.getElementById('filter-approval-date')?.value || 'ALL';
+    const workerVal = document.getElementById('filter-approval-worker')?.value || 'ALL';
+    const statusVal = document.getElementById('filter-approval-status')?.value || 'WAITING_OR_PENDING';
+    const sortMode = document.getElementById('filter-approval-sort')?.value || 'DATE_DESC';
+    const searchQ = (document.getElementById('filter-approval-search')?.value || '').trim().toLowerCase();
 
-    const periodVal = filterPeriod ? filterPeriod.value : 'ALL';
-    const statusVal = filterStatus ? filterStatus.value : 'WAITING_OR_PENDING';
-    const searchQ = (filterSearch ? filterSearch.value : '').trim().toLowerCase();
-
-    return all.filter(s => {
+    const filtered = all.filter(s => {
       if (periodVal && periodVal !== 'ALL' && s.payrollPeriodKey !== periodVal) return false;
+      if (dateVal && dateVal !== 'ALL' && s.sheetDate !== dateVal) return false;
+      if (workerVal && workerVal !== 'ALL' && s.workerCode !== workerVal && s.workerName !== workerVal) return false;
       if (statusVal === 'WAITING_OR_PENDING') {
         if (s.status === 'APPROVED') return false;
       } else if (statusVal === 'ADMIN_VERIFIED') {
@@ -2316,6 +2794,8 @@
       }
       return true;
     });
+
+    return sortSheetsList(filtered, sortMode);
   }
 
   function getActiveApprovalSheet() {
@@ -2436,8 +2916,8 @@
     document.getElementById('btn-app-rotate-img')?.addEventListener('click', () => { appImgRotation = (appImgRotation + 90) % 360; applyApprovalImageTransform(); });
     document.getElementById('btn-app-reset-img')?.addEventListener('click', () => { appImgZoom = 1; appImgRotation = 0; applyApprovalImageTransform(); });
 
-    // Filters in Tab 4
-    ['filter-approval-period', 'filter-approval-status'].forEach(id => {
+    // Filters & Sort in Tab 4
+    ['filter-approval-period', 'filter-approval-date', 'filter-approval-worker', 'filter-approval-status', 'filter-approval-sort'].forEach(id => {
       document.getElementById(id)?.addEventListener('change', () => {
         const list = getFilteredApprovalSheets();
         if (list.length > 0 && !list.some(s => s.id === activeApprovalSheetId)) {
@@ -2446,6 +2926,44 @@
         renderApprovalWorkspace();
       });
     });
+
+    document.getElementById('btn-approval-date-yesterday')?.addEventListener('click', () => {
+      const allDates = getDistinctSheetDates();
+      const yesterdayIso = getLocalIsoDateOffset(-1);
+      const todayIso = getLocalIsoDateOffset(0);
+      let targetDate = yesterdayIso;
+      if (!allDates.includes(yesterdayIso) && allDates.length > 0) {
+        if (allDates[0] === todayIso && allDates.length > 1) {
+          targetDate = allDates[1];
+        } else {
+          targetDate = allDates[0];
+        }
+      }
+      const dateEl = document.getElementById('filter-approval-date');
+      if (dateEl) {
+        if (!Array.from(dateEl.options).some(opt => opt.value === targetDate)) {
+          const opt = document.createElement('option');
+          opt.value = targetDate;
+          opt.textContent = formatThaiSheetDateLabel(targetDate);
+          dateEl.appendChild(opt);
+        }
+        dateEl.value = targetDate;
+      }
+      const list = getFilteredApprovalSheets();
+      if (list.length > 0 && !list.some(s => s.id === activeApprovalSheetId)) {
+        activeApprovalSheetId = list[0].id;
+      }
+      renderApprovalWorkspace();
+    });
+
+    document.getElementById('btn-approval-date-all')?.addEventListener('click', () => {
+      const dateEl = document.getElementById('filter-approval-date');
+      const workerEl = document.getElementById('filter-approval-worker');
+      if (dateEl) dateEl.value = 'ALL';
+      if (workerEl) workerEl.value = 'ALL';
+      renderApprovalWorkspace();
+    });
+
     document.getElementById('filter-approval-search')?.addEventListener('input', () => {
       renderApprovalWorkspace();
     });
@@ -2691,6 +3209,51 @@
 
     const periodFilterVal = filterPeriod ? filterPeriod.value : 'ALL';
     const periodScopedSheets = allSheets.filter(s => periodFilterVal === 'ALL' || s.payrollPeriodKey === periodFilterVal);
+
+    // Populate Date & Worker filters in Tab 4
+    const filterAppDate = document.getElementById('filter-approval-date');
+    if (filterAppDate) {
+      const currDateVal = filterAppDate.value || 'ALL';
+      const dateMap = new Map();
+      periodScopedSheets.forEach(s => {
+        if (!s.sheetDate) return;
+        dateMap.set(s.sheetDate, (dateMap.get(s.sheetDate) || 0) + 1);
+      });
+      const sortedDates = Array.from(dateMap.keys()).sort().reverse();
+      if (currDateVal !== 'ALL' && !sortedDates.includes(currDateVal)) {
+        sortedDates.unshift(currDateVal);
+      }
+      filterAppDate.innerHTML = [
+        `<option value="ALL" ${currDateVal === 'ALL' ? 'selected' : ''}>📅 ทุกวันที่ (${periodScopedSheets.length} ใบ)</option>`,
+        ...sortedDates.map(d => {
+          const cnt = dateMap.get(d) || 0;
+          return `<option value="${escapeHtml(d)}" ${d === currDateVal ? 'selected' : ''}>📅 ${escapeHtml(formatThaiSheetDateLabel(d))} (${cnt} ใบ)</option>`;
+        })
+      ].join('');
+    }
+
+    const filterAppWorker = document.getElementById('filter-approval-worker');
+    if (filterAppWorker) {
+      const currWVal = filterAppWorker.value || 'ALL';
+      const activeAppDate = filterAppDate ? filterAppDate.value : 'ALL';
+      const dateScopedForWorker = activeAppDate === 'ALL'
+        ? periodScopedSheets
+        : periodScopedSheets.filter(s => s.sheetDate === activeAppDate);
+      const wMap = new Map();
+      dateScopedForWorker.forEach(s => {
+        const k = s.workerCode || s.workerName || '';
+        if (!k) return;
+        wMap.set(k, (wMap.get(k) || 0) + 1);
+      });
+      const workers = PayrollDB.getWorkerMappings().slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'th'));
+      filterAppWorker.innerHTML = [
+        `<option value="ALL" ${currWVal === 'ALL' ? 'selected' : ''}>👷 ช่างทุกคน (${dateScopedForWorker.length} ใบ)</option>`,
+        ...workers.map(w => {
+          const cnt = wMap.get(w.code) || 0;
+          return `<option value="${escapeHtml(w.code)}" ${w.code === currWVal ? 'selected' : ''}>👷 ${escapeHtml(w.name)} (${escapeHtml(w.code)}) [${cnt} ใบ]</option>`;
+        })
+      ].join('');
+    }
 
     // Calculate KPI counts for periodScopedSheets
     let pendingAdminCount = 0;

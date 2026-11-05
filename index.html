@@ -43,7 +43,7 @@
                 QueenCosy <span class="text-transparent bg-clip-text bg-gradient-to-r from-emerald-600 to-indigo-600">AI Payroll & Job Sheet Scanner</span>
               </h1>
               <span id="badge-app-version" class="px-2 py-0.5 text-[11px] font-black rounded-lg bg-indigo-600 text-white shadow-sm border border-indigo-400" title="เวอร์ชันระบบปัจจุบัน">
-                v2.6.1
+                v2.7
               </span>
               <span id="badge-cloud-sync" class="px-2.5 py-0.5 text-[10px] font-black rounded-full bg-cyan-100 text-cyan-800 border border-cyan-300 cursor-pointer" title="คลิกเพื่อซิงค์ข้อมูลระหว่างมือถือและคอมพิวเตอร์ทันที">
                 ☁️ กำลังเชื่อมต่อฐานข้อมูลกลาง...
@@ -432,32 +432,79 @@
     <!-- ======================================================================= -->
     <div id="tab-panel-review" class="tab-panel hidden space-y-5">
 
-      <!-- Sheet Selector Bar -->
-      <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        <div class="flex items-center gap-2 flex-wrap">
-          <span class="text-xs font-black text-slate-700">📄 เลือกใบงาน (แอดมินตรวจทาน):</span>
-          <select id="filter-review-status" class="px-2.5 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-white outline-none">
-            <option value="ALL">ทุกสถานะรวมกัน</option>
-            <option value="PENDING_ADMIN">⏳ รอแอดมินตรวจทาน</option>
-            <option value="ADMIN_VERIFIED">🔵 ตรวจทานแล้ว (รออนุมัติแท็บ 4)</option>
-            <option value="APPROVED">🟢 อนุมัติตั้งจ่ายแล้ว</option>
-          </select>
-          <select id="select-review-sheet" class="px-3 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-slate-50 min-w-[260px] outline-none focus:ring-2 focus:ring-indigo-500">
-            <option value="">-- ยังไม่มีใบงาน --</option>
-          </select>
-          <button id="btn-prev-sheet" class="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold">◀ ก่อนหน้า</button>
-          <button id="btn-next-sheet" class="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold">ถัดไป ▶</button>
-          <span id="review-sheet-status-badge" class="px-2.5 py-1 rounded-full text-[11px] font-black bg-amber-100 text-amber-800 border border-amber-300">
-            ⏳ รอแอดมินตรวจทาน
-          </span>
+      <!-- Sheet Filter, Sort & Quick Selector Card -->
+      <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm space-y-3">
+        <!-- Row 1: Date Filter, Worker Filter, Status Filter & Sort Order -->
+        <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end text-xs border-b border-slate-100 pb-3">
+          <div class="sm:col-span-4">
+            <div class="flex items-center justify-between mb-1">
+              <label class="font-black text-slate-700">📅 เลือกวันที่ใบงาน:</label>
+              <div class="flex items-center gap-1">
+                <button type="button" id="btn-review-date-yesterday" class="px-2 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[10px] font-black cursor-pointer" title="ดูใบงานของเมื่อวาน">เมื่อวาน</button>
+                <button type="button" id="btn-review-date-today" class="px-2 py-0.5 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[10px] font-black cursor-pointer" title="ดูใบงานของวันนี้">วันนี้</button>
+                <button type="button" id="btn-review-filter-reset" class="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold cursor-pointer" title="แสดงทุกวันและช่างทุกคน">ทั้งหมด</button>
+              </div>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <select id="filter-review-date" class="flex-1 px-2.5 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-white outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="ALL">📅 ทุกวันที่รวมกัน</option>
+              </select>
+              <input type="date" id="filter-review-date-picker" class="w-34 px-2 py-1.5 text-xs font-bold rounded-xl border border-slate-300 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500" title="เลือกวันที่จากปฏิทินโดยตรง">
+            </div>
+          </div>
+
+          <div class="sm:col-span-3">
+            <label class="block font-black text-slate-700 mb-1">👷 เลือกชื่อช่าง:</label>
+            <select id="filter-review-worker" class="w-full px-2.5 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-white outline-none focus:ring-2 focus:ring-indigo-500">
+              <option value="ALL">👷 ช่างทุกคนรวมกัน</option>
+            </select>
+          </div>
+
+          <div class="sm:col-span-2">
+            <label class="block font-black text-slate-700 mb-1">📌 สถานะใบงาน:</label>
+            <select id="filter-review-status" class="w-full px-2.5 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-white outline-none">
+              <option value="ALL">ทุกสถานะรวมกัน</option>
+              <option value="PENDING_ADMIN">⏳ รอแอดมินตรวจทาน</option>
+              <option value="ADMIN_VERIFIED">🔵 ตรวจทานแล้ว (รออนุมัติ)</option>
+              <option value="APPROVED">🟢 อนุมัติตั้งจ่ายแล้ว</option>
+            </select>
+          </div>
+
+          <div class="sm:col-span-3">
+            <label class="block font-black text-slate-700 mb-1">🔃 จัดเรียงรายการ (Sort):</label>
+            <select id="filter-review-sort" class="w-full px-2.5 py-2 text-xs font-bold rounded-xl border border-indigo-200 bg-indigo-50/50 text-indigo-950 outline-none">
+              <option value="DATE_DESC">📅 เรียงตามวันที่ใบงาน (ใหม่ ➔ เก่า)</option>
+              <option value="WORKER_ASC">👷 เรียงตามชื่อช่าง (ก-ฮ) + วันที่</option>
+              <option value="DATE_ASC">📅 เรียงตามวันที่ใบงาน (เก่า ➔ ใหม่)</option>
+              <option value="SCAN_DESC">⏱️ เรียงตามเวลาที่สแกนล่าสุด</option>
+            </select>
+          </div>
         </div>
-        <div class="flex items-center gap-2">
-          <button id="btn-rescan-current-sheet" class="px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold cursor-pointer">
-            🔄 ให้ AI อ่านใบนี้ใหม่
-          </button>
-          <button id="btn-delete-current-sheet" class="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold cursor-pointer">
-            🗑️ ลบใบงานนี้
-          </button>
+
+        <!-- Row 2: Active Sheet Selector & Action Buttons -->
+        <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div class="flex items-center gap-2 flex-wrap flex-1">
+            <span class="text-xs font-black text-slate-700 shrink-0">📄 ใบงานที่เปิดดู:</span>
+            <select id="select-review-sheet" class="px-3 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-slate-50 min-w-[280px] flex-1 max-w-xl outline-none focus:ring-2 focus:ring-indigo-500">
+              <option value="">-- ยังไม่มีใบงาน --</option>
+            </select>
+            <button id="btn-prev-sheet" class="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold cursor-pointer">◀ ก่อนหน้า</button>
+            <button id="btn-next-sheet" class="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold cursor-pointer">ถัดไป ▶</button>
+            <span id="review-sheet-status-badge" class="px-2.5 py-1 rounded-full text-[11px] font-black bg-amber-100 text-amber-800 border border-amber-300">
+              ⏳ รอแอดมินตรวจทาน
+            </span>
+          </div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <a href="#review-daily-report-card" class="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-black cursor-pointer">
+              📋 ดูตารางรายงานใบงานด้านล่าง
+            </a>
+            <button id="btn-rescan-current-sheet" class="px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold cursor-pointer">
+              🔄 ให้ AI อ่านใบนี้ใหม่
+            </button>
+            <button id="btn-delete-current-sheet" class="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold cursor-pointer">
+              🗑️ ลบใบงานนี้
+            </button>
+          </div>
         </div>
       </div>
 
@@ -620,6 +667,57 @@
         </div>
 
       </div>
+
+      <!-- Daily Scanned Job Sheet Report & Quick Finder Table -->
+      <div id="review-daily-report-card" class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div>
+            <h3 class="font-black text-base text-slate-900 flex items-center gap-2 flex-wrap">
+              <span>📋 รายงานสรุปใบงานที่สแกนรายวัน & ค้นหาใบงานตามวันที่ / ชื่อช่าง</span>
+              <span id="review-report-filter-summary" class="px-2.5 py-0.5 text-xs font-black rounded-full bg-indigo-100 text-indigo-800">ทุกวันที่ • ช่างทุกคน</span>
+            </h3>
+            <p class="text-xs text-slate-500 mt-0.5">
+              แสดงรายการใบงานตามวันที่และชื่อช่างที่เลือกด้านบน คลิกปุ่ม <strong>"🔍 เปิดดูใบงาน"</strong> ในแถวใดก็ได้เพื่อกระโดดไปดูรูปใบงานและแก้ไขทันทีโดยไม่ต้องเลื่อนหาทีละใบ
+            </p>
+          </div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <span id="review-report-kpi-pill" class="px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 font-black text-xs">
+              0 ใบงาน • 0 ชิ้น • 0 ฿
+            </span>
+            <button type="button" id="btn-export-review-report-excel" class="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-sm transition cursor-pointer flex items-center gap-1.5">
+              <span>📥 Export Excel รายงานใบงานที่เลือก</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Daily Worker Submission Check Box (shows which workers submitted vs not submitted on selected date) -->
+        <div id="review-daily-worker-check" class="hidden p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+          <!-- Populated dynamically via JS when a specific date is selected -->
+        </div>
+
+        <div class="overflow-x-auto border border-slate-200 rounded-xl max-h-[460px] overflow-y-auto">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead class="bg-slate-100 text-slate-700 sticky top-0 z-10 border-b border-slate-200">
+              <tr>
+                <th class="py-2.5 px-3 w-12 text-center">#</th>
+                <th class="py-2.5 px-3">วันที่ใบงาน</th>
+                <th class="py-2.5 px-3">งวดจ่ายเงิน</th>
+                <th class="py-2.5 px-3">ชื่อช่าง (รหัส)</th>
+                <th class="py-2.5 px-3 text-center">แผนก</th>
+                <th class="py-2.5 px-3 text-center">จำนวนแถว / ชิ้น</th>
+                <th class="py-2.5 px-3 text-right">รวมค่าแรง (฿)</th>
+                <th class="py-2.5 px-3">รุ่นที่ผลิตในใบงาน</th>
+                <th class="py-2.5 px-3 text-center">สถานะ</th>
+                <th class="py-2.5 px-3 text-center">เปิดดูรูป & แก้ไข</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-review-report-list" class="divide-y divide-slate-100">
+              <!-- Populated via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
     </div>
 
     <!-- ======================================================================= -->
@@ -680,34 +778,63 @@
           </div>
         </div>
 
-        <!-- Filters & Batch Approval Bar -->
-        <div class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end text-xs pt-1">
-          <div class="sm:col-span-3">
+        <!-- Filters, Date/Worker Sort & Batch Approval Bar -->
+        <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end text-xs pt-1">
+          <div class="sm:col-span-2">
             <label class="block text-slate-300 font-bold mb-1">🗓️ กรองงวดจ่ายเงิน:</label>
-            <select id="filter-approval-period" class="w-full px-3 py-2 rounded-xl bg-white text-slate-900 font-black outline-none">
-              <option value="ALL">ทุกงวดรวมกัน (All Periods)</option>
+            <select id="filter-approval-period" class="w-full px-2.5 py-2 rounded-xl bg-white text-slate-900 font-black outline-none">
+              <option value="ALL">ทุกงวดรวมกัน</option>
             </select>
           </div>
           <div class="sm:col-span-3">
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-slate-300 font-bold">📅 วันที่ใบงาน:</label>
+              <div class="flex items-center gap-1">
+                <button type="button" id="btn-approval-date-yesterday" class="px-1.5 py-0.5 rounded bg-teal-400/20 hover:bg-teal-400/30 text-teal-200 border border-teal-400/40 text-[10px] font-black cursor-pointer">เมื่อวาน</button>
+                <button type="button" id="btn-approval-date-all" class="px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/20 text-slate-200 text-[10px] font-bold cursor-pointer">ทุกวัน</button>
+              </div>
+            </div>
+            <select id="filter-approval-date" class="w-full px-2.5 py-2 rounded-xl bg-white text-slate-900 font-bold outline-none">
+              <option value="ALL">📅 ทุกวันที่รวมกัน</option>
+            </select>
+          </div>
+          <div class="sm:col-span-2">
+            <label class="block text-slate-300 font-bold mb-1">👷 เลือกชื่อช่าง:</label>
+            <select id="filter-approval-worker" class="w-full px-2.5 py-2 rounded-xl bg-white text-slate-900 font-bold outline-none">
+              <option value="ALL">👷 ช่างทุกคน</option>
+            </select>
+          </div>
+          <div class="sm:col-span-2">
             <label class="block text-slate-300 font-bold mb-1">📌 สถานะใบงาน:</label>
-            <select id="filter-approval-status" class="w-full px-3 py-2 rounded-xl bg-white text-slate-900 font-bold outline-none">
-              <option value="WAITING_OR_PENDING">🔵 รอผู้มีอำนาจอนุมัติ + รอตรวจ</option>
-              <option value="ADMIN_VERIFIED">🔵 เฉพาะที่แอดมินตรวจทานแล้ว (รออนุมัติ)</option>
-              <option value="EDITED_ONLY">✏️ เฉพาะใบงานที่มีการแก้ไขข้อมูล</option>
-              <option value="APPROVED">🟢 อนุมัติเข้าตั้งจ่ายแล้ว</option>
-              <option value="ALL">แสดงทุกสถานะทั้งหมด</option>
+            <select id="filter-approval-status" class="w-full px-2.5 py-2 rounded-xl bg-white text-slate-900 font-bold outline-none">
+              <option value="WAITING_OR_PENDING">🔵 รออนุมัติ + รอตรวจ</option>
+              <option value="ADMIN_VERIFIED">🔵 ตรวจทานแล้ว (รออนุมัติ)</option>
+              <option value="EDITED_ONLY">✏️ เฉพาะที่มีแก้ไขข้อมูล</option>
+              <option value="APPROVED">🟢 อนุมัติตั้งจ่ายแล้ว</option>
+              <option value="ALL">ทุกสถานะทั้งหมด</option>
             </select>
           </div>
           <div class="sm:col-span-3">
-            <label class="block text-slate-300 font-bold mb-1">🔍 ค้นหาชื่อช่าง / วันที่:</label>
-            <input type="text" id="filter-approval-search" placeholder="พิมพ์ชื่อช่าง เช่น นุนุ, ไซ, บายมอญ..." class="w-full px-3 py-2 rounded-xl bg-white text-slate-900 font-bold outline-none">
+            <label class="block text-slate-300 font-bold mb-1">🔃 จัดเรียงรายการ (Sort):</label>
+            <select id="filter-approval-sort" class="w-full px-2.5 py-2 rounded-xl bg-white text-slate-900 font-bold outline-none">
+              <option value="DATE_DESC">📅 เรียงตามวันที่ใบงาน (ใหม่ ➔ เก่า)</option>
+              <option value="WORKER_ASC">👷 เรียงตามชื่อช่าง (ก-ฮ) + วันที่</option>
+              <option value="DATE_ASC">📅 เรียงตามวันที่ใบงาน (เก่า ➔ ใหม่)</option>
+              <option value="WAGE_DESC">💰 เรียงตามยอดค่าแรง (มาก ➔ น้อย)</option>
+            </select>
           </div>
-          <div class="sm:col-span-3 flex items-center gap-2">
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center text-xs pt-1">
+          <div class="sm:col-span-6">
+            <input type="text" id="filter-approval-search" placeholder="🔍 พิมพ์ค้นหาชื่อช่าง / รหัสช่าง / วันที่ (เช่น นุนุ, ไซ, บายมอญ, 2026-11-04)..." class="w-full px-3 py-2 rounded-xl bg-white text-slate-900 font-bold outline-none">
+          </div>
+          <div class="sm:col-span-6 flex items-center gap-2">
             <button type="button" id="btn-batch-approve-selected" class="flex-1 py-2 px-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-lg transition cursor-pointer">
               ✅ อนุมัติที่เลือก (<span id="label-selected-approve-count">0</span>)
             </button>
-            <button type="button" id="btn-batch-approve-all-period" class="py-2 px-3 bg-teal-500/30 hover:bg-teal-500/40 text-teal-100 border border-teal-400/40 font-bold text-xs rounded-xl transition cursor-pointer" title="อนุมัติใบงานที่แอดมินตรวจทานแล้วทั้งหมดในงวดที่เลือก">
-              ✅ อนุมัติทั้งงวด
+            <button type="button" id="btn-batch-approve-all-period" class="py-2 px-3 bg-teal-500/30 hover:bg-teal-500/40 text-teal-100 border border-teal-400/40 font-bold text-xs rounded-xl transition cursor-pointer" title="อนุมัติใบงานที่แสดงตามตัวกรองทั้งหมด">
+              ✅ อนุมัติทั้งหมดในตัวกรองนี้
             </button>
           </div>
         </div>
@@ -1282,7 +1409,7 @@
   </div>
 
   <!-- Scripts -->
-  <script src="payroll-db.js?v=2.6.1"></script>
-  <script src="app.js?v=2.6.1"></script>
+  <script src="payroll-db.js?v=2.7"></script>
+  <script src="app.js?v=2.7"></script>
 </body>
 </html>

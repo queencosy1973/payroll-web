@@ -5,7 +5,7 @@
 const PayrollDB = (function () {
   'use strict';
 
-  const APP_VERSION = 'v2.6.1';
+  const APP_VERSION = 'v2.7';
   const DEFAULT_APPROVER_PIN = '1973';
 
   const STORAGE_KEYS = {
