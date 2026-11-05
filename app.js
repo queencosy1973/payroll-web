@@ -108,6 +108,10 @@
   }
 
   function updateHeaderBadges() {
+    const verBadge = document.getElementById('badge-app-version');
+    if (verBadge && PayrollDB.APP_VERSION) {
+      verBadge.textContent = PayrollDB.APP_VERSION;
+    }
     const cfg = PayrollDB.getConfig();
     const apiBadge = document.getElementById('badge-api-status');
     if (apiBadge) {
@@ -587,6 +591,9 @@
     let workerSaveFeedbackTimer = null;
     const triggerWorkerAutoSave = () => {
       saveWorkerTableFromDOM();
+      renderReviewSelectorAndWorkspace();
+      renderPayrollDashboard();
+      renderExecutiveDashboard();
       const btnSaveWorker = document.getElementById('btn-save-worker-table');
       if (btnSaveWorker) {
         btnSaveWorker.textContent = '✅ บันทึกอัตโนมัติแล้ว!';
@@ -1267,6 +1274,21 @@
       });
     }
 
+    const deptBadgeBtn = document.getElementById('review-worker-dept-badge');
+    if (deptBadgeBtn) {
+      deptBadgeBtn.addEventListener('click', () => {
+        const sheet = getActiveSheet();
+        if (!sheet) return;
+        const nextDept = sheet.workerDept === 'เย็บ' ? 'หุ้ม' : 'เย็บ';
+        sheet.workerDept = nextDept;
+        if (typeof PayrollDB.setWorkerDepartment === 'function') {
+          PayrollDB.setWorkerDepartment(sheet.workerCode || sheet.workerName, nextDept);
+        }
+        PayrollDB.upsertSheet(sheet);
+        refreshAllViews();
+      });
+    }
+
     // Sheet Date & Period changes
     const inputDate = document.getElementById('review-input-date');
     if (inputDate) {
@@ -1287,6 +1309,8 @@
         const sheet = getActiveSheet();
         if (!sheet) return;
         sheet.payrollPeriodKey = selectPeriod.value;
+        const baseP = PayrollDB.calculatePayrollPeriod(sheet.sheetDate);
+        sheet.isLateCarryOver = (sheet.payrollPeriodKey !== baseP.periodKey);
         PayrollDB.upsertSheet(sheet);
         renderReviewSelectorAndWorkspace();
       });
@@ -1298,8 +1322,13 @@
         const sheet = getActiveSheet();
         if (!sheet) return;
         const baseP = PayrollDB.calculatePayrollPeriod(sheet.sheetDate);
-        sheet.payrollPeriodKey = PayrollDB.getNextPayrollPeriodKey(baseP.periodKey);
-        sheet.isLateCarryOver = true;
+        if (sheet.payrollPeriodKey !== baseP.periodKey) {
+          sheet.payrollPeriodKey = baseP.periodKey;
+          sheet.isLateCarryOver = false;
+        } else {
+          sheet.payrollPeriodKey = PayrollDB.getNextPayrollPeriodKey(baseP.periodKey);
+          sheet.isLateCarryOver = true;
+        }
         PayrollDB.upsertSheet(sheet);
         renderReviewSelectorAndWorkspace();
       });
@@ -1529,12 +1558,13 @@
 
     const deptBadge = document.getElementById('review-worker-dept-badge');
     if (deptBadge) {
+      deptBadge.title = 'คลิกเพื่อสลับแผนกของช่างคนนี้ (หุ้ม ⇄ เย็บ) และคำนวณเรทใหม่ทันที';
       if (sheet.workerDept === 'เย็บ') {
-        deptBadge.className = 'px-2 py-0.5 rounded text-[10px] font-black bg-emerald-100 text-emerald-900 border border-emerald-300';
-        deptBadge.textContent = '🧵 แผนกช่างเย็บ (คิดเรทค่าเย็บ)';
+        deptBadge.className = 'px-2 py-0.5 rounded text-[10px] font-black bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border border-emerald-300 cursor-pointer transition';
+        deptBadge.textContent = '🧵 แผนกช่างเย็บ (คิดเรทค่าเย็บ) ⇄ คลิกสลับ';
       } else {
-        deptBadge.className = 'px-2 py-0.5 rounded text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300';
-        deptBadge.textContent = '🔨 แผนกช่างหุ้ม (คิดเรทค่าหุ้ม)';
+        deptBadge.className = 'px-2 py-0.5 rounded text-[10px] font-black bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 cursor-pointer transition';
+        deptBadge.textContent = '🔨 แผนกช่างหุ้ม (คิดเรทค่าหุ้ม) ⇄ คลิกสลับ';
       }
     }
 
@@ -1547,6 +1577,7 @@
     // Payroll Period options
     const selectPeriod = document.getElementById('review-select-period');
     const payDateHint = document.getElementById('review-paydate-hint');
+    const btnShiftNextPeriod = document.getElementById('btn-shift-next-period');
     if (selectPeriod) {
       const periodKeys = buildPeriodOptionsList(sheet.sheetDate);
       if (!periodKeys.includes(sheet.payrollPeriodKey)) {
@@ -1559,6 +1590,16 @@
       const activeMeta = PayrollDB.getPeriodMetaFromKey(sheet.payrollPeriodKey);
       if (payDateHint) {
         payDateHint.textContent = `💰 กำหนดโอนจ่ายวันที่ ${activeMeta.payDateLabel}`;
+      }
+      if (btnShiftNextPeriod && sheet.sheetDate) {
+        const baseP = PayrollDB.calculatePayrollPeriod(sheet.sheetDate);
+        if (sheet.payrollPeriodKey !== baseP.periodKey) {
+          btnShiftNextPeriod.className = 'px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold whitespace-nowrap shadow-sm cursor-pointer';
+          btnShiftNextPeriod.textContent = '🟢 คืนกลับงวดปกติตามวันที่ใบงาน';
+        } else {
+          btnShiftNextPeriod.className = 'px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[11px] font-bold whitespace-nowrap shadow-sm cursor-pointer';
+          btnShiftNextPeriod.textContent = '🟠 ปัดไปงวดถัดไปตามหมายเหตุ';
+        }
       }
     }
 
@@ -2019,6 +2060,24 @@
   function syncReviewTableToSheetObject(sheet) {
     const tbody = document.getElementById('tbody-review-items');
     if (!tbody || !sheet) return;
+    const selectWorker = document.getElementById('review-select-worker');
+    if (selectWorker && selectWorker.value) {
+      const w = PayrollDB.getWorkerMappings().find(x => x.code === selectWorker.value);
+      if (w) {
+        sheet.workerCode = w.code;
+        sheet.workerName = w.name;
+        sheet.workerDept = w.dept;
+        sheet.isWorkerMatched = true;
+      }
+    }
+    const inputDate = document.getElementById('review-input-date');
+    if (inputDate && inputDate.value) {
+      sheet.sheetDate = inputDate.value;
+    }
+    const selectPeriod = document.getElementById('review-select-period');
+    if (selectPeriod && selectPeriod.value) {
+      sheet.payrollPeriodKey = selectPeriod.value;
+    }
     const inputNote = document.getElementById('review-input-note');
     if (inputNote) sheet.specialNote = inputNote.value.trim();
 
@@ -2098,17 +2157,22 @@
     });
 
     const byWorkerMap = new Map();
+    const masterWorkerMap = new Map(
+      PayrollDB.getWorkerMappings().map(w => [String(w.code || '').toLowerCase(), w])
+    );
     let totalUnits = 0;
     let totalUphWage = 0;
     let totalSewWage = 0;
 
     filteredSheets.forEach(s => {
       const wKey = (s.workerCode || s.workerName || 'UNKNOWN').toLowerCase();
+      const masterW = masterWorkerMap.get(String(s.workerCode || '').toLowerCase());
+      const resolvedDept = (masterW && masterW.dept) ? masterW.dept : (s.workerDept || 'หุ้ม');
       if (!byWorkerMap.has(wKey)) {
         byWorkerMap.set(wKey, {
           workerCode: s.workerCode || '-',
-          workerName: s.workerName || 'ไม่ระบุชื่อ',
-          dept: s.workerDept || 'หุ้ม',
+          workerName: (masterW && masterW.name) ? masterW.name : (s.workerName || 'ไม่ระบุชื่อ'),
+          dept: resolvedDept,
           sheetCount: 0,
           totalUnits: 0,
           totalWage: 0,

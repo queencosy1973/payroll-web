@@ -5,6 +5,8 @@
 const PayrollDB = (function () {
   'use strict';
 
+  const APP_VERSION = 'v2.5';
+
   const STORAGE_KEYS = {
     CONFIG: 'qc_payroll_config_v1',
     SKU_MAP: 'qc_payroll_sku_mapping_v1',
@@ -194,31 +196,36 @@ const PayrollDB = (function () {
     }
   ];
 
-  // Default 23 Master Workers from QueenCosy System + Handwritten Aliases
+  // Default 28 Master Workers from QueenCosy System + Handwritten Aliases
   const DEFAULT_WORKER_MAPPINGS = [
-    { code: 'cv1',  name: 'นาย',     dept: 'หุ้ม', aliases: ['นาย', 'cv1', 'nai'] },
-    { code: 'cv2',  name: 'เอ',      dept: 'หุ้ม', aliases: ['เอ', 'cv2', 'a', 'ae'] },
+    { code: 'cv1',  name: 'นาย',     dept: 'หุ้ม', aliases: ['นาย', 'cv1', 'nai', 'nine'] },
+    { code: 'cv2',  name: 'เอ',      dept: 'หุ้ม', aliases: ['เอ', 'cv2', 'a', 'ae', 'aye'] },
     { code: 'cv3',  name: 'บายมอญ',  dept: 'หุ้ม', aliases: ['บายมอญ', 'cv3', 'blai morn', 'blai mon', 'blaimorn', 'blaimon', 'บายมอน', 'บานมอญ'] },
-    { code: 'cv4',  name: 'พู',      dept: 'หุ้ม', aliases: ['พู', 'cv4', 'phu', 'poo'] },
-    { code: 'cv5',  name: 'หลวย',    dept: 'หุ้ม', aliases: ['หลวย', 'cv5', 'luay'] },
+    { code: 'cv4',  name: 'พู',      dept: 'หุ้ม', aliases: ['พู', 'cv4', 'phu', 'poo', 'phoo'] },
+    { code: 'cv5',  name: 'หลวย',    dept: 'หุ้ม', aliases: ['หลวย', 'cv5', 'luay', 'lwin'] },
     { code: 'cv6',  name: 'ตะไป',    dept: 'หุ้ม', aliases: ['ตะไป', 'cv6', 'tapai'] },
-    { code: 'cv7',  name: 'โทน',     dept: 'หุ้ม', aliases: ['โทน', 'cv7', 'tone', 'thon'] },
+    { code: 'cv7',  name: 'โทน',     dept: 'หุ้ม', aliases: ['โทน', 'cv7', 'tone', 'thon', 'tun'] },
     { code: 'cv8',  name: 'จอซียะ',  dept: 'หุ้ม', aliases: ['จอซียะ', 'cv8', 'jorsiya'] },
-    { code: 'cv9',  name: 'ตู๋มิธ',   dept: 'หุ้ม', aliases: ['ตู๋มิธ', 'cv9', 'tumit'] },
+    { code: 'cv9',  name: 'ตู๋มิธ',   dept: 'หุ้ม', aliases: ['ตู๋มิธ', 'cv9', 'tumit', 'thu'] },
     { code: 'cv10', name: 'วินเหวง',  dept: 'หุ้ม', aliases: ['วินเหวง', 'cv10', 'winweng', 'win'] },
     { code: 'cv11', name: 'ไซ',      dept: 'หุ้ม', aliases: ['ไซ', 'cv11', 'sai'] },
-    { code: 'cv12', name: 'แทนไท',   dept: 'หุ้ม', aliases: ['แทนไท', 'cv12', 'thaenthai'] },
-    { code: 'cv13', name: 'ศิริชัย',  dept: 'หุ้ม', aliases: ['ศิริชัย', 'cv13', 'sirichai'] },
+    { code: 'cv12', name: 'แทนไท',   dept: 'หุ้ม', aliases: ['แทนไท', 'cv12', 'thaenthai', 'than'] },
+    { code: 'cv13', name: 'ศิริชัย',  dept: 'หุ้ม', aliases: ['ศิริชัย', 'cv13', 'sirichai', 'xai'] },
     { code: 'cv14', name: 'ชา',      dept: 'หุ้ม', aliases: ['ชา', 'cv14', 'cha'] },
-    { code: 'cv15', name: 'มิ้นท์',    dept: 'หุ้ม', aliases: ['มิ้นท์', 'มิ้น', 'cv15', 'mint'] },
-    { code: 'cv16', name: 'ตู 2',    dept: 'หุ้ม', aliases: ['ตู 2', 'ตู2', 'cv16', 'tu 2', 'tu2'] },
-    { code: 'cv17', name: 'เอโป',    dept: 'หุ้ม', aliases: ['เอโป', 'cv17', 'apo', 'a-po'] },
+    { code: 'cv15', name: 'มิ้นท์',    dept: 'หุ้ม', aliases: ['มิ้นท์', 'มิ้น', 'cv15', 'mint', 'chat'] },
+    { code: 'cv16', name: 'ตู 2',    dept: 'หุ้ม', aliases: ['ตู 2', 'ตู2', 'cv16', 'tu 2', 'tu2', 'thu2'] },
+    { code: 'cv17', name: 'อาโป',    dept: 'หุ้ม', aliases: ['อาโป', 'เอโป', 'cv17', 'apo', 'a-po'] },
+    { code: 'cv18', name: 'อ๋อง',     dept: 'หุ้ม', aliases: ['อ๋อง', 'Aung', 'aung', 'cv18'] },
+    { code: 'cv19', name: 'เทด',     dept: 'หุ้ม', aliases: ['เทด', 'Hhat', 'cv19'] },
+    { code: 'CV20', name: 'เมา',     dept: 'หุ้ม', aliases: ['M', 'เมา', 'CV20'] },
     { code: 'sew1', name: 'อ่อน',     dept: 'เย็บ', aliases: ['อ่อน', 'sew1', 'on', 'aon'] },
-    { code: 'sew2', name: 'เนยู',     dept: 'เย็บ', aliases: ['เนยู', 'sew2', 'neyu'] },
+    { code: 'sew2', name: 'เนยู',     dept: 'เย็บ', aliases: ['เนยู', 'sew2', 'neyu', 'hninyu'] },
     { code: 'sew3', name: 'บี',       dept: 'เย็บ', aliases: ['บี', 'sew3', 'bee', 'b'] },
-    { code: 'sew4', name: 'มุ่ย',      dept: 'เย็บ', aliases: ['มุ่ย', 'sew4', 'mui'] },
+    { code: 'sew4', name: 'มุ่ย',      dept: 'เย็บ', aliases: ['มุ่ย', 'sew4', 'mui', 'mwi'] },
     { code: 'sew5', name: 'แมว',      dept: 'เย็บ', aliases: ['แมว', 'sew5', 'maew', 'cat'] },
-    { code: 'sew6', name: 'แจ๊ค',     dept: 'เย็บ', aliases: ['แจ๊ค', 'แจ็ค', 'sew6', 'jack'] }
+    { code: 'sew6', name: 'แจ๊ค',     dept: 'เย็บ', aliases: ['แจ๊ค', 'แจ็ค', 'sew6', 'jack'] },
+    { code: 'sew7', name: 'พิว',      dept: 'เย็บ', aliases: ['พิว', 'phyu', 'sew7'] },
+    { code: 'sew8', name: 'นุนุ',      dept: 'เย็บ', aliases: ['นุนุ', 'nunu', 'nu nu', 'nu win', 'sew8'] }
   ];
 
   let supabaseClient = null;
@@ -355,6 +362,7 @@ const PayrollDB = (function () {
   function saveSkuMappings(list, skipCloudPush = false) {
     if (!Array.isArray(list)) return;
     localStorage.setItem(STORAGE_KEYS.SKU_MAP, JSON.stringify(list));
+    reconcileAllSavedSheetsWithMappings(!skipCloudPush);
     if (!skipCloudPush) {
       lastLocalMappingEditMs = Date.now();
       setLocalMappingsUpdatedAt(new Date().toISOString());
@@ -376,11 +384,29 @@ const PayrollDB = (function () {
   function saveWorkerMappings(list, skipCloudPush = false) {
     if (!Array.isArray(list)) return;
     localStorage.setItem(STORAGE_KEYS.WORKER_MAP, JSON.stringify(list));
+    reconcileAllSavedSheetsWithMappings(!skipCloudPush);
     if (!skipCloudPush) {
       lastLocalMappingEditMs = Date.now();
       setLocalMappingsUpdatedAt(new Date().toISOString());
       schedulePushConfigAndMappings();
     }
+  }
+
+  function setWorkerDepartment(workerCodeOrName, newDept) {
+    if (!workerCodeOrName || !newDept) return false;
+    const cleanDept = newDept === 'เย็บ' ? 'เย็บ' : 'หุ้ม';
+    const key = String(workerCodeOrName).trim().toLowerCase();
+    const list = getWorkerMappings();
+    const found = list.find(w =>
+      String(w.code || '').trim().toLowerCase() === key ||
+      String(w.name || '').trim().toLowerCase() === key
+    );
+    if (found) {
+      found.dept = cleanDept;
+      saveWorkerMappings(list, false);
+      return true;
+    }
+    return false;
   }
 
   function resetMappingsToDefault() {
@@ -858,8 +884,9 @@ const PayrollDB = (function () {
               const key = code.toLowerCase();
               const existing = workerMap.get(key);
               if (existing) {
-                existing.name = name;
-                existing.dept = dept;
+                // Preserve any custom department or name edits made in Tab 1
+                if (!existing.name) existing.name = name;
+                if (!existing.dept) existing.dept = dept;
                 if (!existing.aliases.includes(name)) existing.aliases.push(name);
                 syncedWorkerCount++;
               } else {
@@ -1101,7 +1128,7 @@ ${workerContext}
    - แปลงเป็นรูปแบบ YYYY-MM-DD (ค.ศ. 2026 เสมอ เช่น "2026-06-15")
 
 4. หมายเหตุพิเศษกลางหน้ากระดาษ:
-   - หากมีข้อความเขียนหมายเหตุในตาราง เช่น "เอาไปรวมยอด 16-30 มิ.ย. 69 เนื่องจากส่งใบงานล่าช้า" ให้ดึงมาใส่ในฟิลด์ specialNote และตั้งค่า isLateCarryOver = true
+   - หากมีข้อความเขียนหมายเหตุเพื่อขอปัดไปงวดถัดไป เช่น "เอาไปรวมยอด 16-30 มิ.ย. 69 เนื่องจากส่งใบงานล่าช้า" ให้ดึงมาใส่ในฟิลด์ specialNote และตั้งค่า isLateCarryOver = true (แต่ถ้าเขียนว่า "ไม่รวมยอด" เช่น "TT 18.10 ไม่รวมยอด" ห้ามตั้ง isLateCarryOver = true ให้ตั้งเป็น false เสมอ)
 
 5. คอลัมน์ "พนง.แจกงาน":
    - หากมีการเขียนปีกกา "}" รวบหลายบรรทัดเข้าด้วยกัน (เช่น TikTok } 15/6) ให้กระจายค่าเดียวกันนั้นใส่ในทุกแถวที่อยู่ในปีกกา
@@ -1229,7 +1256,9 @@ ${workerContext}
     }
 
     const basePeriod = calculatePayrollPeriod(isoDate);
-    const isLate = Boolean(aiData.isLateCarryOver) || /รวมยอด|ล่าช้า/.test(aiData.specialNote || '');
+    const noteText = String(aiData.specialNote || '').trim();
+    const isNotCarryOver = /ไม่รวมยอด/.test(noteText);
+    const isLate = !isNotCarryOver && (Boolean(aiData.isLateCarryOver) || /เอาไปรวมยอด|รวมยอดงวด|ส่งใบงานล่าช้า|ส่งช้า|ล่าช้า/.test(noteText));
     const assignedPeriodKey = isLate ? getNextPayrollPeriodKey(basePeriod.periodKey) : basePeriod.periodKey;
 
     const dept = workerMatch.dept || 'หุ้ม';
@@ -1662,6 +1691,94 @@ ${workerContext}
         s.payrollPeriodKey = `2026-${s.payrollPeriodKey.slice(5)}`;
       }
     }
+    // Auto-heal false-positive late carry-over when note contains "ไม่รวมยอด" (e.g. "TT 18.10 ไม่รวมยอด")
+    if (s.specialNote && /ไม่รวมยอด/.test(s.specialNote) && s.isLateCarryOver && s.sheetDate) {
+      s.isLateCarryOver = false;
+      s.payrollPeriodKey = calculatePayrollPeriod(s.sheetDate).periodKey;
+    }
+  }
+
+  function reconcileSheetWithMappingsInPlace(s, workerList, skuList) {
+    if (!s || s.isDemo) return false;
+    const workers = workerList || getWorkerMappings();
+    const skus = skuList || getSkuMappings();
+    let changed = false;
+
+    const prevPeriod = s.payrollPeriodKey;
+    normalizeSheetYearInPlace(s);
+    if (s.payrollPeriodKey !== prevPeriod) changed = true;
+
+    const wCodeKey = String(s.workerCode || '').trim().toLowerCase();
+    const wNameKey = String(s.workerName || '').trim().toLowerCase();
+    const matchedWorker = workers.find(w =>
+      (wCodeKey && String(w.code || '').trim().toLowerCase() === wCodeKey) ||
+      (wNameKey && String(w.name || '').trim().toLowerCase() === wNameKey)
+    );
+    if (matchedWorker && matchedWorker.dept && s.workerDept !== matchedWorker.dept) {
+      s.workerDept = matchedWorker.dept;
+      changed = true;
+    }
+
+    const dept = s.workerDept || 'หุ้ม';
+    let sheetTotalUnits = 0;
+    let sheetTotalWage = 0;
+
+    (s.items || []).forEach((item, i) => {
+      item.rowNo = i + 1;
+      const skuInfo = skus.find(k => k.model.toLowerCase() === String(item.matchedSku || '').toLowerCase());
+      if (skuInfo) {
+        const expectedRate = dept === 'เย็บ' ? Number(skuInfo.sewingWage) : Number(skuInfo.upholsteryWage);
+        if (Number(item.unitRate) !== expectedRate || item.skuName !== skuInfo.name) {
+          item.skuName = skuInfo.name;
+          item.unitRate = expectedRate;
+          changed = true;
+        }
+        item.isMatched = true;
+      } else {
+        item.isMatched = Boolean(item.matchedSku);
+        item.unitRate = Number(item.unitRate) || 0;
+      }
+      item.qty = Math.max(1, parseInt(item.qty, 10) || 1);
+      const nextLineTotal = item.qty * item.unitRate;
+      if (Number(item.lineTotal) !== nextLineTotal) {
+        item.lineTotal = nextLineTotal;
+        changed = true;
+      }
+      sheetTotalUnits += item.qty;
+      sheetTotalWage += item.lineTotal;
+    });
+
+    if (Number(s.totalUnits) !== sheetTotalUnits || Number(s.totalWage) !== sheetTotalWage) {
+      s.totalUnits = sheetTotalUnits;
+      s.totalWage = sheetTotalWage;
+      changed = true;
+    }
+    return changed;
+  }
+
+  function reconcileAllSavedSheetsWithMappings(pushChangedToCloud = false) {
+    const sheets = getSavedSheets();
+    if (!Array.isArray(sheets) || sheets.length === 0) return 0;
+    const workers = getWorkerMappings();
+    const skus = getSkuMappings();
+    const changedSheets = [];
+
+    for (const s of sheets) {
+      if (reconcileSheetWithMappingsInPlace(s, workers, skus)) {
+        s.updatedAt = new Date().toISOString();
+        changedSheets.push(s);
+      }
+    }
+    if (changedSheets.length > 0) {
+      saveSheets(sheets);
+      if (pushChangedToCloud) {
+        changedSheets.forEach(cs => {
+          localSheetEditTimes.set(cs.id, Date.now());
+          pushSheetToCloud(cs).catch(() => {});
+        });
+      }
+    }
+    return changedSheets.length;
   }
 
   function getSheetWorkerDayKey(sheet) {
@@ -1830,7 +1947,17 @@ ${workerContext}
       }
     }
 
-    // Recalculate totals before saving
+    // Sync workerDept from Master Worker Mappings & recalculate totals before saving
+    const workerList = getWorkerMappings();
+    const wCodeKey = String(sheetObj.workerCode || '').trim().toLowerCase();
+    const wNameKey = String(sheetObj.workerName || '').trim().toLowerCase();
+    const masterWorker = workerList.find(w =>
+      (wCodeKey && String(w.code || '').trim().toLowerCase() === wCodeKey) ||
+      (wNameKey && String(w.name || '').trim().toLowerCase() === wNameKey)
+    );
+    if (masterWorker && masterWorker.dept) {
+      sheetObj.workerDept = masterWorker.dept;
+    }
     const dept = sheetObj.workerDept || 'หุ้ม';
     let sheetTotalUnits = 0;
     let sheetTotalWage = 0;
@@ -2125,6 +2252,17 @@ ${workerContext}
         return tB.localeCompare(tA);
       });
       const mergedSheets = deduplicateSheetsByWorkerAndDate(sortedMerged, !useIncremental);
+      const currentWorkers = getWorkerMappings();
+      const currentSkus = getSkuMappings();
+      mergedSheets.forEach(ms => {
+        if (reconcileSheetWithMappingsInPlace(ms, currentWorkers, currentSkus)) {
+          ms.updatedAt = new Date().toISOString();
+          sheetsChangedFromCloud = true;
+          if (!useIncremental) {
+            pushSheetToCloud(ms).catch(() => {});
+          }
+        }
+      });
       saveSheets(mergedSheets);
 
       // 3. Merge Queue Items
@@ -2357,12 +2495,14 @@ ${workerContext}
   }
 
   return {
+    APP_VERSION,
     getConfig,
     saveConfig,
     getSkuMappings,
     saveSkuMappings,
     getWorkerMappings,
     saveWorkerMappings,
+    setWorkerDepartment,
     resetMappingsToDefault,
     learnSkuAlias,
     learnWorkerAlias,
