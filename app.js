@@ -13,7 +13,9 @@
   let imgRotation = 0;
   let appImgZoom = 1;
   let appImgRotation = 0;
-  let isApproverUnlocked = sessionStorage.getItem('qc_approver_unlocked_v1') === '1';
+  let isApproverUnlocked = false;
+  let lastApproverActivityMs = 0;
+  const APPROVER_IDLE_TIMEOUT_MS = 3 * 60 * 1000; // 3 นาที
   const selectedApprovalSheetIds = new Set();
 
   // Chart.js Instances for Tab 6 Executive Dashboard
@@ -193,6 +195,10 @@
         panel.classList.add('hidden');
       }
     });
+
+    if (tabName !== 'approval' && isApproverUnlocked) {
+      lockApproverMode();
+    }
 
     if (tabName === 'review') {
       renderReviewSelectorAndWorkspace();
@@ -2206,15 +2212,37 @@
   // ===========================================================================
   // TAB 4: 🛡️ APPROVER & AUDIT TRAIL (ผู้มีอำนาจอนุมัติ & รายงานแก้ไข)
   // ===========================================================================
+  function lockApproverMode() {
+    isApproverUnlocked = false;
+    lastApproverActivityMs = 0;
+    try {
+      sessionStorage.removeItem('qc_approver_unlocked_v1');
+    } catch (e) {}
+    updateApproverPinLockBadge();
+  }
+
+  function touchApproverActivity() {
+    if (isApproverUnlocked) {
+      lastApproverActivityMs = Date.now();
+    }
+  }
+
   function ensureApproverUnlocked(actionText = 'อนุมัติใบงานเข้าตั้งจ่ายเงิน') {
-    if (isApproverUnlocked) return true;
+    if (isApproverUnlocked) {
+      if (Date.now() - lastApproverActivityMs >= APPROVER_IDLE_TIMEOUT_MS) {
+        lockApproverMode();
+      } else {
+        touchApproverActivity();
+        return true;
+      }
+    }
     const cfg = PayrollDB.getConfig();
     const expectedPin = String(cfg.approverPin || '1973').trim();
-    const entered = prompt(`🔐 กรุณาใส่รหัส PIN ผู้มีอำนาจอนุมัติเพื่อ "${actionText}"\n(ค่าเริ่มต้น: 1973 — สามารถเปลี่ยนรหัสได้ที่ปุ่ม ⚙️ เปลี่ยนรหัส PIN):`, '');
+    const entered = prompt(`🔐 กรุณาใส่รหัส PIN ผู้มีอำนาจอนุมัติเพื่อ "${actionText}"\n(ปลดล็อกเฉพาะเครื่องนี้ และจะล็อกอัตโนมัติทันทีที่สลับแท็บหรือไม่ได้ใช้งาน 3 นาที):`, '');
     if (entered === null) return false;
     if (String(entered).trim() === expectedPin) {
       isApproverUnlocked = true;
-      sessionStorage.setItem('qc_approver_unlocked_v1', '1');
+      lastApproverActivityMs = Date.now();
       updateApproverPinLockBadge();
       return true;
     }
@@ -2227,17 +2255,21 @@
     const btnToggle = document.getElementById('btn-approver-pin-toggle');
     if (badge) {
       if (isApproverUnlocked) {
+        const elapsed = Date.now() - (lastApproverActivityMs || Date.now());
+        const remainSec = Math.max(0, Math.ceil((APPROVER_IDLE_TIMEOUT_MS - elapsed) / 1000));
+        const mm = String(Math.floor(remainSec / 60)).padStart(2, '0');
+        const ss = String(remainSec % 60).padStart(2, '0');
         badge.className = 'px-3 py-1.5 rounded-xl text-xs font-black bg-emerald-400/20 text-emerald-200 border border-emerald-400/40 flex items-center gap-1.5';
-        badge.innerHTML = '<span>🔓 โหมดผู้มีอำนาจอนุมัติ: ปลดล็อกพร้อมอนุมัติแล้ว</span>';
+        badge.innerHTML = `<span>🔓 ปลดล็อกอยู่ (ล็อกอัตโนมัติใน ${mm}:${ss} หรือเมื่อสลับแท็บ)</span>`;
       } else {
         badge.className = 'px-3 py-1.5 rounded-xl text-xs font-black bg-amber-400/20 text-amber-200 border border-amber-400/40 flex items-center gap-1.5';
-        badge.innerHTML = '<span>🔒 โหมดผู้มีอำนาจอนุมัติ: ล็อกอยู่ (ป้องกันแอดมินกดอนุมัติเอง)</span>';
+        badge.innerHTML = '<span>🔒 โหมดผู้มีอำนาจอนุมัติ: ล็อกอยู่ (ป้องกันคนอื่นกดอนุมัติแทน)</span>';
       }
     }
     if (btnToggle) {
       if (isApproverUnlocked) {
         btnToggle.className = 'px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs rounded-xl shadow transition cursor-pointer';
-        btnToggle.textContent = '🔒 ล็อกโหมดอนุมัติ';
+        btnToggle.textContent = '🔒 ล็อกด่วนทันที';
       } else {
         btnToggle.className = 'px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow transition cursor-pointer';
         btnToggle.textContent = '🔑 ใส่รหัส PIN อนุมัติ';
@@ -2346,13 +2378,39 @@
   function initApprovalWorkspaceUI() {
     updateApproverPinLockBadge();
 
+    // Track activity inside Tab 4 & run 1-second auto-lock countdown timer
+    const approvalPanel = document.getElementById('tab-panel-approval');
+    if (approvalPanel) {
+      ['mousemove', 'mousedown', 'keydown', 'touchstart'].forEach(evtName => {
+        approvalPanel.addEventListener(evtName, () => {
+          if (isApproverUnlocked) {
+            lastApproverActivityMs = Date.now();
+          }
+        }, { passive: true });
+      });
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden' && isApproverUnlocked) {
+        lockApproverMode();
+      }
+    });
+
+    setInterval(() => {
+      if (!isApproverUnlocked) return;
+      const elapsed = Date.now() - (lastApproverActivityMs || Date.now());
+      if (elapsed >= APPROVER_IDLE_TIMEOUT_MS) {
+        lockApproverMode();
+      } else {
+        updateApproverPinLockBadge();
+      }
+    }, 1000);
+
     const btnPinToggle = document.getElementById('btn-approver-pin-toggle');
     if (btnPinToggle) {
       btnPinToggle.addEventListener('click', () => {
         if (isApproverUnlocked) {
-          isApproverUnlocked = false;
-          sessionStorage.removeItem('qc_approver_unlocked_v1');
-          updateApproverPinLockBadge();
+          lockApproverMode();
         } else {
           ensureApproverUnlocked('ปลดล็อกโหมดผู้มีอำนาจอนุมัติ');
         }
@@ -2417,10 +2475,14 @@
       }
     });
 
-    // Editable Header in Tab 4
+    // Editable Header in Tab 4 (requires Approver PIN unlock)
     document.getElementById('approval-select-worker')?.addEventListener('change', (e) => {
       const sheet = getActiveApprovalSheet();
       if (!sheet) return;
+      if (!ensureApproverUnlocked('แก้ไขชื่อช่างในหน้าอนุมัติ')) {
+        renderApprovalWorkspace();
+        return;
+      }
       const w = PayrollDB.getWorkerMappings().find(x => x.code === e.target.value);
       if (w) {
         sheet.workerCode = w.code;
@@ -2434,6 +2496,7 @@
     document.getElementById('approval-worker-dept-badge')?.addEventListener('click', () => {
       const sheet = getActiveApprovalSheet();
       if (!sheet) return;
+      if (!ensureApproverUnlocked('สลับแผนกช่างในหน้าอนุมัติ')) return;
       const nextDept = sheet.workerDept === 'เย็บ' ? 'หุ้ม' : 'เย็บ';
       sheet.workerDept = nextDept;
       if (typeof PayrollDB.setWorkerDepartment === 'function') {
@@ -2446,6 +2509,10 @@
     document.getElementById('approval-input-date')?.addEventListener('change', (e) => {
       const sheet = getActiveApprovalSheet();
       if (!sheet) return;
+      if (!ensureApproverUnlocked('แก้ไขวันที่ใบงานในหน้าอนุมัติ')) {
+        renderApprovalWorkspace();
+        return;
+      }
       sheet.sheetDate = e.target.value;
       const p = PayrollDB.calculatePayrollPeriod(sheet.sheetDate);
       sheet.payrollPeriodKey = p.periodKey;
@@ -2456,6 +2523,10 @@
     document.getElementById('approval-select-period')?.addEventListener('change', (e) => {
       const sheet = getActiveApprovalSheet();
       if (!sheet) return;
+      if (!ensureApproverUnlocked('แก้ไขงวดจ่ายเงินในหน้าอนุมัติ')) {
+        renderApprovalWorkspace();
+        return;
+      }
       sheet.payrollPeriodKey = e.target.value;
       PayrollDB.upsertSheet(sheet, false, { actorRole: 'APPROVER' });
       refreshAllViews();
@@ -2464,6 +2535,10 @@
     document.getElementById('approval-input-note')?.addEventListener('change', (e) => {
       const sheet = getActiveApprovalSheet();
       if (!sheet) return;
+      if (!ensureApproverUnlocked('แก้ไขหมายเหตุในหน้าอนุมัติ')) {
+        renderApprovalWorkspace();
+        return;
+      }
       sheet.specialNote = e.target.value.trim();
       PayrollDB.upsertSheet(sheet, false, { actorRole: 'APPROVER' });
       refreshAllViews();
@@ -2472,6 +2547,7 @@
     document.getElementById('btn-add-approval-item')?.addEventListener('click', () => {
       const sheet = getActiveApprovalSheet();
       if (!sheet) return;
+      if (!ensureApproverUnlocked('เพิ่มแถวรายการในหน้าอนุมัติ')) return;
       syncApprovalTableToSheetObject(sheet);
       sheet.items.push({
         rowNo: sheet.items.length + 1,
@@ -2491,6 +2567,7 @@
     document.getElementById('btn-approver-save-edits')?.addEventListener('click', () => {
       const sheet = getActiveApprovalSheet();
       if (!sheet) return;
+      if (!ensureApproverUnlocked('บันทึกการแก้ไขในหน้าอนุมัติ')) return;
       syncApprovalTableToSheetObject(sheet);
       PayrollDB.upsertSheet(sheet, false, {
         actorRole: 'APPROVER',
@@ -2532,6 +2609,7 @@
     document.getElementById('btn-return-to-admin')?.addEventListener('click', () => {
       const sheet = getActiveApprovalSheet();
       if (!sheet) return;
+      if (!ensureApproverUnlocked(`ตีกลับใบงานของ ${sheet.workerName} ให้แอดมินตรวจใหม่`)) return;
       const reason = prompt(`↩️ ระบุเหตุผลที่ตีกลับใบงานของ "${sheet.workerName}" ให้แอดมินตรวจสอบใหม่ (เว้นว่างได้):`, '');
       if (reason === null) return;
       syncApprovalTableToSheetObject(sheet);
@@ -2843,6 +2921,10 @@
 
         tbodyItems.querySelectorAll('.app-item-raw, .app-item-sku, .app-item-color, .app-item-qty').forEach(el => {
           el.addEventListener('change', () => {
+            if (!ensureApproverUnlocked('แก้ไขรายการในหน้าอนุมัติ')) {
+              renderApprovalWorkspace();
+              return;
+            }
             syncApprovalTableToSheetObject(sheet);
             PayrollDB.upsertSheet(sheet, false, { actorRole: 'APPROVER', keepApprovedStatus: true });
             refreshAllViews();
@@ -2851,6 +2933,7 @@
 
         tbodyItems.querySelectorAll('.btn-del-app-item').forEach(btn => {
           btn.addEventListener('click', () => {
+            if (!ensureApproverUnlocked('ลบแถวรายการในหน้าอนุมัติ')) return;
             syncApprovalTableToSheetObject(sheet);
             const idx = parseInt(btn.getAttribute('data-idx'), 10);
             sheet.items.splice(idx, 1);
