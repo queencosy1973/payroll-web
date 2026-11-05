@@ -5,7 +5,8 @@
 const PayrollDB = (function () {
   'use strict';
 
-  const APP_VERSION = 'v2.5';
+  const APP_VERSION = 'v2.6';
+  const DEFAULT_APPROVER_PIN = '1973';
 
   const STORAGE_KEYS = {
     CONFIG: 'qc_payroll_config_v1',
@@ -288,7 +289,8 @@ const PayrollDB = (function () {
         geminiModel: safeModel,
         supabaseUrl: saved.supabaseUrl || DEFAULT_SUPABASE_URL,
         supabaseKey: saved.supabaseKey || DEFAULT_SUPABASE_KEY,
-        autoScanOnCapture: saved.autoScanOnCapture !== undefined ? saved.autoScanOnCapture : true
+        autoScanOnCapture: saved.autoScanOnCapture !== undefined ? saved.autoScanOnCapture : true,
+        approverPin: (saved.approverPin && String(saved.approverPin).trim()) || DEFAULT_APPROVER_PIN
       };
     } catch (e) {
       return {
@@ -296,7 +298,8 @@ const PayrollDB = (function () {
         geminiModel: DEFAULT_GEMINI_MODEL,
         supabaseUrl: DEFAULT_SUPABASE_URL,
         supabaseKey: DEFAULT_SUPABASE_KEY,
-        autoScanOnCapture: true
+        autoScanOnCapture: true,
+        approverPin: DEFAULT_APPROVER_PIN
       };
     }
   }
@@ -1289,7 +1292,7 @@ ${workerContext}
       };
     });
 
-    return {
+    const builtSheet = {
       id: 'SH-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase(),
       createdAt: new Date().toISOString(),
       imageDataUrl: imageDataUrl || '',
@@ -1303,9 +1306,12 @@ ${workerContext}
       specialNote: aiData.specialNote || '',
       isLateCarryOver: isLate,
       payrollPeriodKey: assignedPeriodKey,
-      status: 'VERIFIED', // 'PENDING_REVIEW' or 'VERIFIED'
+      status: 'PENDING_ADMIN', // 'PENDING_ADMIN' (รอแอดมินตรวจ) -> 'ADMIN_VERIFIED' (รออนุมัติ) -> 'APPROVED' (อนุมัติตั้งจ่าย)
+      editHistory: [],
       items
     };
+    builtSheet.aiOriginalSnapshot = createSheetSnapshot(builtSheet);
+    return builtSheet;
   }
 
   // Pre-built sample sheet from the user's actual photo (Blai Morn 15.6.69)
@@ -1480,6 +1486,7 @@ ${workerContext}
         mappingsUpdatedAt: nowIso,
         geminiApiKey: cfg.geminiApiKey || '',
         geminiModel: cfg.geminiModel || DEFAULT_GEMINI_MODEL,
+        approverPin: cfg.approverPin || DEFAULT_APPROVER_PIN,
         skuMappings,
         workerMappings
       },
@@ -1674,6 +1681,157 @@ ${workerContext}
   // SAVED JOB SHEETS STORAGE & PAYROLL AGGREGATION (LOCAL + CLOUD SYNCED)
   // Rule: 1 Job Sheet per 1 Worker per 1 Date (1 ใบงาน = 1 ชื่อช่าง ต่อ 1 วัน)
   // ===========================================================================
+  // ===========================================================================
+  // AUDIT TRAIL & CHANGE DIFF ENGINE (Maker-Checker: AI -> Admin -> Approver)
+  // ===========================================================================
+  function createSheetSnapshot(s) {
+    if (!s) return null;
+    return {
+      workerCode: String(s.workerCode || ''),
+      workerName: String(s.workerName || ''),
+      workerDept: String(s.workerDept || 'หุ้ม'),
+      sheetDate: String(s.sheetDate || ''),
+      payrollPeriodKey: String(s.payrollPeriodKey || ''),
+      specialNote: String(s.specialNote || ''),
+      totalUnits: Number(s.totalUnits) || 0,
+      totalWage: Number(s.totalWage) || 0,
+      items: (s.items || []).map((it, idx) => ({
+        rowNo: idx + 1,
+        rawModel: String(it.rawModel || ''),
+        matchedSku: String(it.matchedSku || ''),
+        skuName: String(it.skuName || ''),
+        color: String(it.color || ''),
+        qty: Number(it.qty) || 1,
+        channel: String(it.channel || ''),
+        stockReceiver: String(it.stockReceiver || ''),
+        unitRate: Number(it.unitRate) || 0,
+        lineTotal: Number(it.lineTotal) || 0
+      }))
+    };
+  }
+
+  function computeSheetDiffsBetween(baseSnap, currSnap) {
+    const diffs = [];
+    if (!baseSnap || !currSnap) return diffs;
+
+    if ((baseSnap.workerName || '') !== (currSnap.workerName || '') || (baseSnap.workerCode || '') !== (currSnap.workerCode || '')) {
+      diffs.push({
+        type: 'HEADER',
+        field: 'worker',
+        summary: `ชื่อช่าง: "${baseSnap.workerName || '-'}" ➔ "${currSnap.workerName || '-'}"`
+      });
+    }
+    if ((baseSnap.workerDept || 'หุ้ม') !== (currSnap.workerDept || 'หุ้ม')) {
+      diffs.push({
+        type: 'HEADER',
+        field: 'dept',
+        summary: `แผนก: "${baseSnap.workerDept || 'หุ้ม'}" ➔ "${currSnap.workerDept || 'หุ้ม'}"`
+      });
+    }
+    if ((baseSnap.sheetDate || '') !== (currSnap.sheetDate || '')) {
+      diffs.push({
+        type: 'HEADER',
+        field: 'sheetDate',
+        summary: `วันที่ใบงาน: "${baseSnap.sheetDate || '-'}" ➔ "${currSnap.sheetDate || '-'}"`
+      });
+    }
+    if ((baseSnap.payrollPeriodKey || '') !== (currSnap.payrollPeriodKey || '')) {
+      diffs.push({
+        type: 'HEADER',
+        field: 'payrollPeriodKey',
+        summary: `งวดจ่ายเงิน: "${baseSnap.payrollPeriodKey || '-'}" ➔ "${currSnap.payrollPeriodKey || '-'}"`
+      });
+    }
+    if (String(baseSnap.specialNote || '').trim() !== String(currSnap.specialNote || '').trim()) {
+      diffs.push({
+        type: 'HEADER',
+        field: 'specialNote',
+        summary: `หมายเหตุ: "${baseSnap.specialNote || '-'}" ➔ "${currSnap.specialNote || '-'}"`
+      });
+    }
+
+    const baseItems = Array.isArray(baseSnap.items) ? baseSnap.items : [];
+    const currItems = Array.isArray(currSnap.items) ? currSnap.items : [];
+    const maxLen = Math.max(baseItems.length, currItems.length);
+
+    for (let i = 0; i < maxLen; i++) {
+      const b = baseItems[i];
+      const c = currItems[i];
+      const rowNum = i + 1;
+
+      if (!b && c) {
+        diffs.push({
+          type: 'ROW_ADDED',
+          rowIndex: i,
+          rowNo: rowNum,
+          summary: `เพิ่มแถวที่ ${rowNum}: ${(c.matchedSku || c.rawModel || '-').toUpperCase()} จำนวน ${c.qty} ชิ้น (${c.lineTotal}฿)`
+        });
+      } else if (b && !c) {
+        diffs.push({
+          type: 'ROW_REMOVED',
+          rowIndex: i,
+          rowNo: rowNum,
+          summary: `ลบแถวที่ ${rowNum} เดิม: ${(b.matchedSku || b.rawModel || '-').toUpperCase()} จำนวน ${b.qty} ชิ้น (${b.lineTotal}฿)`
+        });
+      } else if (b && c) {
+        const rowChanges = [];
+        if (String(b.matchedSku || '').toLowerCase() !== String(c.matchedSku || '').toLowerCase()) {
+          rowChanges.push(`SKU ${(b.matchedSku || 'ไม่ระบุ').toUpperCase()} ➔ ${(c.matchedSku || 'ไม่ระบุ').toUpperCase()}`);
+        }
+        if ((Number(b.qty) || 1) !== (Number(c.qty) || 1)) {
+          rowChanges.push(`จำนวน ${b.qty} ➔ ${c.qty} ชิ้น`);
+        }
+        if (String(b.color || '').trim() !== String(c.color || '').trim()) {
+          rowChanges.push(`สี "${b.color || '-'}" ➔ "${c.color || '-'}"`);
+        }
+        if ((Number(b.unitRate) || 0) !== (Number(c.unitRate) || 0)) {
+          rowChanges.push(`เรท ${b.unitRate}฿ ➔ ${c.unitRate}฿`);
+        }
+        if (rowChanges.length > 0) {
+          diffs.push({
+            type: 'ROW_MODIFIED',
+            rowIndex: i,
+            rowNo: rowNum,
+            changes: rowChanges,
+            summary: `แถวที่ ${rowNum}: ${rowChanges.join(' | ')}`
+          });
+        }
+      }
+    }
+    return diffs;
+  }
+
+  function computeSheetAuditReport(sheet) {
+    if (!sheet) {
+      return { hasChanges: false, totalDiffCount: 0, headerDiffs: [], rowDiffMap: {}, rowDiffList: [], editHistory: [] };
+    }
+    const currSnap = createSheetSnapshot(sheet);
+    const baseSnap = sheet.aiOriginalSnapshot || currSnap;
+    const netDiffs = computeSheetDiffsBetween(baseSnap, currSnap);
+    const headerDiffs = netDiffs.filter(d => d.type === 'HEADER');
+    const rowDiffList = netDiffs.filter(d => d.type !== 'HEADER');
+    const rowDiffMap = {};
+    rowDiffList.forEach(d => {
+      if (typeof d.rowIndex === 'number') {
+        rowDiffMap[d.rowIndex] = d;
+      }
+    });
+
+    const editHistory = Array.isArray(sheet.editHistory) ? sheet.editHistory : [];
+    const historyDiffCount = editHistory.reduce((acc, h) => acc + ((h.diffs && h.diffs.length) || 0), 0);
+    const totalDiffCount = netDiffs.length > 0 ? netDiffs.length : historyDiffCount;
+
+    return {
+      hasChanges: totalDiffCount > 0,
+      totalDiffCount,
+      netDiffs,
+      headerDiffs,
+      rowDiffList,
+      rowDiffMap,
+      editHistory
+    };
+  }
+
   function normalizeSheetYearInPlace(s) {
     if (!s || s.isDemo) return;
     if (s.sheetDate && /^\d{4}-\d{2}-\d{2}$/.test(s.sheetDate)) {
@@ -1699,10 +1857,22 @@ ${workerContext}
   }
 
   function reconcileSheetWithMappingsInPlace(s, workerList, skuList) {
-    if (!s || s.isDemo) return false;
+    if (!s) return false;
+    if (s.isDemo) {
+      if (!s.status || s.status === 'VERIFIED') s.status = 'APPROVED';
+      return false;
+    }
     const workers = workerList || getWorkerMappings();
     const skus = skuList || getSkuMappings();
     let changed = false;
+
+    // Normalize legacy status 'VERIFIED' -> 'ADMIN_VERIFIED' (รอผู้มีอำนาจอนุมัติในแท็บ 4)
+    if (!s.status || s.status === 'VERIFIED') {
+      s.status = 'ADMIN_VERIFIED';
+    }
+    if (!Array.isArray(s.editHistory)) {
+      s.editHistory = [];
+    }
 
     const prevPeriod = s.payrollPeriodKey;
     normalizeSheetYearInPlace(s);
@@ -1752,6 +1922,9 @@ ${workerContext}
       s.totalUnits = sheetTotalUnits;
       s.totalWage = sheetTotalWage;
       changed = true;
+    }
+    if (!s.aiOriginalSnapshot) {
+      s.aiOriginalSnapshot = createSheetSnapshot(s);
     }
     return changed;
   }
@@ -1918,7 +2091,7 @@ ${workerContext}
     return true;
   }
 
-  function upsertSheet(sheetObj, skipCloudPush = false) {
+  function upsertSheet(sheetObj, skipCloudPush = false, options = {}) {
     if (!sheetObj || !sheetObj.id) return;
     const skuList = getSkuMappings();
     const all = getSavedSheets();
@@ -1945,6 +2118,29 @@ ${workerContext}
           }
         }
       }
+    }
+
+    const prevExisting = idx >= 0 ? all[idx] : null;
+    const prevSnapshotBeforeEdit = prevExisting ? createSheetSnapshot(prevExisting) : null;
+
+    if (prevExisting) {
+      if (!sheetObj.aiOriginalSnapshot && prevExisting.aiOriginalSnapshot) {
+        sheetObj.aiOriginalSnapshot = prevExisting.aiOriginalSnapshot;
+      }
+      if (!Array.isArray(sheetObj.editHistory)) {
+        sheetObj.editHistory = Array.isArray(prevExisting.editHistory) ? [...prevExisting.editHistory] : [];
+      }
+      if (!sheetObj.status && prevExisting.status) {
+        sheetObj.status = prevExisting.status;
+      }
+    } else {
+      if (!Array.isArray(sheetObj.editHistory)) {
+        sheetObj.editHistory = [];
+      }
+    }
+
+    if (!sheetObj.status || sheetObj.status === 'VERIFIED') {
+      sheetObj.status = sheetObj.isDemo ? 'APPROVED' : 'ADMIN_VERIFIED';
     }
 
     // Sync workerDept from Master Worker Mappings & recalculate totals before saving
@@ -1982,6 +2178,33 @@ ${workerContext}
     sheetObj.totalUnits = sheetTotalUnits;
     sheetObj.totalWage = sheetTotalWage;
     sheetObj.updatedAt = new Date().toISOString();
+
+    if (!sheetObj.aiOriginalSnapshot) {
+      sheetObj.aiOriginalSnapshot = createSheetSnapshot(sheetObj);
+    }
+
+    // Record Audit Trail diffs when an existing sheet is modified or explicitly saved/approved
+    if (prevSnapshotBeforeEdit && !options.skipAuditLog) {
+      const nextSnapshot = createSheetSnapshot(sheetObj);
+      const stepDiffs = computeSheetDiffsBetween(prevSnapshotBeforeEdit, nextSnapshot);
+      const actorRole = options.actorRole || 'ADMIN';
+      if (stepDiffs.length > 0 || options.recordActionEvenIfUnchanged) {
+        const defaultLabel = actorRole === 'APPROVER' ? 'ผู้มีอำนาจอนุมัติแก้ไขข้อมูล' : 'แอดมินแก้ไขข้อมูล (แท็บ 3)';
+        sheetObj.editHistory.push({
+          at: sheetObj.updatedAt,
+          role: actorRole,
+          label: options.actionLabel || defaultLabel,
+          diffs: stepDiffs.map(d => d.summary)
+        });
+        if (sheetObj.editHistory.length > 30) {
+          sheetObj.editHistory = sheetObj.editHistory.slice(-30);
+        }
+      }
+      // Safety rule: if an ADMIN edits a sheet that was already APPROVED, revert status to ADMIN_VERIFIED so Approver re-checks!
+      if (stepDiffs.length > 0 && actorRole === 'ADMIN' && sheetObj.status === 'APPROVED' && !options.keepApprovedStatus) {
+        sheetObj.status = 'ADMIN_VERIFIED';
+      }
+    }
 
     if (idx >= 0) {
       if (!sheetObj.imageDataUrl && all[idx].imageDataUrl) {
@@ -2029,6 +2252,43 @@ ${workerContext}
       pendingSheetPushTimers.set(sheetObj.id, timerId);
     }
     return sheetObj;
+  }
+
+  function approveSheetsBatch(sheetIds, actorLabel = 'ผู้มีอำนาจอนุมัติ') {
+    if (!Array.isArray(sheetIds) || sheetIds.length === 0) return 0;
+    const idSet = new Set(sheetIds);
+    const all = getSavedSheets();
+    const nowIso = new Date().toISOString();
+    const updatedList = [];
+
+    all.forEach(s => {
+      if (s && idSet.has(s.id) && s.status !== 'APPROVED') {
+        s.status = 'APPROVED';
+        s.approvedAt = nowIso;
+        s.approvedBy = actorLabel;
+        s.updatedAt = nowIso;
+        if (!Array.isArray(s.editHistory)) s.editHistory = [];
+        s.editHistory.push({
+          at: nowIso,
+          role: 'APPROVER',
+          label: 'อนุมัติใบงานเข้าตั้งจ่ายเงิน',
+          diffs: []
+        });
+        updatedList.push(s);
+      }
+    });
+
+    if (updatedList.length > 0) {
+      saveSheets(all);
+      lastLocalSheetEditMs = Date.now();
+      updatedList.forEach((s, i) => {
+        localSheetEditTimes.set(s.id, Date.now());
+        setTimeout(() => {
+          pushSheetToCloud(s).catch(e => console.warn('Batch approve push warning:', e));
+        }, Math.min(i * 60, 2500));
+      });
+    }
+    return updatedList.length;
   }
 
   function deleteSheet(sheetId, skipCloudDelete = false) {
@@ -2128,6 +2388,9 @@ ${workerContext}
         }
         if (cloudConfigRow.geminiModel && !RETIRED_GEMINI_MODELS.has(cloudConfigRow.geminiModel)) {
           updates.geminiModel = cloudConfigRow.geminiModel;
+        }
+        if (cloudConfigRow.approverPin && String(cloudConfigRow.approverPin).trim() !== String(localCfg.approverPin || '').trim()) {
+          updates.approverPin = String(cloudConfigRow.approverPin).trim();
         }
         if (Object.keys(updates).length > 0) {
           saveConfig(updates, true);
@@ -2412,7 +2675,7 @@ ${workerContext}
           specialNote: dObj.late && wIdx === 2 ? dObj.note : '',
           isLateCarryOver: Boolean(dObj.late && wIdx === 2),
           payrollPeriodKey: dObj.period,
-          status: 'VERIFIED',
+          status: 'APPROVED',
           totalUnits,
           totalWage,
           items
@@ -2521,6 +2784,9 @@ ${workerContext}
     getSavedSheets,
     saveSheets,
     upsertSheet,
+    approveSheetsBatch,
+    createSheetSnapshot,
+    computeSheetAuditReport,
     deleteSheet,
     fetchSheetImage,
     getQueueItems,

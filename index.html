@@ -43,7 +43,7 @@
                 QueenCosy <span class="text-transparent bg-clip-text bg-gradient-to-r from-emerald-600 to-indigo-600">AI Payroll & Job Sheet Scanner</span>
               </h1>
               <span id="badge-app-version" class="px-2 py-0.5 text-[11px] font-black rounded-lg bg-indigo-600 text-white shadow-sm border border-indigo-400" title="เวอร์ชันระบบปัจจุบัน">
-                v2.5
+                v2.6
               </span>
               <span id="badge-cloud-sync" class="px-2.5 py-0.5 text-[10px] font-black rounded-full bg-cyan-100 text-cyan-800 border border-cyan-300 cursor-pointer" title="คลิกเพื่อซิงค์ข้อมูลระหว่างมือถือและคอมพิวเตอร์ทันที">
                 ☁️ กำลังเชื่อมต่อฐานข้อมูลกลาง...
@@ -75,23 +75,26 @@
 
       <!-- Navigation Tabs -->
       <div class="flex border-t border-slate-100 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-        <button class="nav-tab-btn py-3 px-4 text-xs sm:text-sm font-black border-b-2 border-emerald-600 text-emerald-700 flex items-center gap-2 whitespace-nowrap transition-colors" data-tab="mapping">
-          <span>🔄 1. ตารางจับคู่ SKU / ชื่อช่าง & ตั้งค่า Gemini API</span>
+        <button class="nav-tab-btn py-3 px-3.5 text-xs sm:text-sm font-black border-b-2 border-emerald-600 text-emerald-700 flex items-center gap-1.5 whitespace-nowrap transition-colors" data-tab="mapping">
+          <span>🔄 1. ตารางจับคู่ SKU / ชื่อช่าง</span>
         </button>
-        <button class="nav-tab-btn py-3 px-4 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-2 whitespace-nowrap transition-colors" data-tab="scanner">
-          <span>📸 2. ถ่ายรูปใบงานด่วน / อัปโหลด (100+ ใบ/วัน)</span>
+        <button class="nav-tab-btn py-3 px-3.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-1.5 whitespace-nowrap transition-colors" data-tab="scanner">
+          <span>📸 2. ถ่ายรูปใบงานด่วน / อัปโหลด</span>
           <span id="badge-queue-count" class="px-1.5 py-0.5 text-[10px] font-black rounded-full bg-slate-200 text-slate-700">0</span>
         </button>
-        <button class="nav-tab-btn py-3 px-4 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-2 whitespace-nowrap transition-colors" data-tab="review">
-          <span>🔍 3. ตรวจสอบใบงานเทียบข้าง (Review & Verify)</span>
+        <button class="nav-tab-btn py-3 px-3.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-1.5 whitespace-nowrap transition-colors" data-tab="review">
+          <span>🔍 3. แอดมินตรวจใบงาน (Review)</span>
           <span id="badge-sheets-count" class="px-1.5 py-0.5 text-[10px] font-black rounded-full bg-blue-100 text-blue-800">0 ใบ</span>
         </button>
-        <button class="nav-tab-btn py-3 px-4 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-2 whitespace-nowrap transition-colors" data-tab="payroll">
-          <span>💰 4. สรุปงวดจ่ายค่าแรง 15 วัน & พิมพ์สลิป</span>
+        <button class="nav-tab-btn py-3 px-3.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-1.5 whitespace-nowrap transition-colors" data-tab="approval">
+          <span>🛡️ 4. ผู้มีอำนาจอนุมัติ (Approval)</span>
+          <span id="badge-approval-count" class="px-1.5 py-0.5 text-[10px] font-black rounded-full bg-amber-100 text-amber-800 border border-amber-300">0 รออนุมัติ</span>
         </button>
-        <button class="nav-tab-btn py-3 px-4 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-2 whitespace-nowrap transition-colors" data-tab="dashboard">
-          <span>📊 5. แดชบอร์ดผู้บริหาร & กราฟเปรียบเทียบรายเดือน</span>
-          <span class="px-1.5 py-0.5 text-[10px] font-black rounded-full bg-purple-100 text-purple-800">NEW</span>
+        <button class="nav-tab-btn py-3 px-3.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-1.5 whitespace-nowrap transition-colors" data-tab="payroll">
+          <span>💰 5. สรุปงวดจ่ายค่าแรง 15 วัน & พิมพ์สลิป</span>
+        </button>
+        <button class="nav-tab-btn py-3 px-3.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-1.5 whitespace-nowrap transition-colors" data-tab="dashboard">
+          <span>📊 6. แดชบอร์ดผู้บริหาร</span>
         </button>
       </div>
     </div>
@@ -432,12 +435,21 @@
       <!-- Sheet Selector Bar -->
       <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         <div class="flex items-center gap-2 flex-wrap">
-          <span class="text-xs font-black text-slate-700">📄 เลือกใบงานที่ต้องการตรวจสอบ:</span>
+          <span class="text-xs font-black text-slate-700">📄 เลือกใบงาน (แอดมินตรวจทาน):</span>
+          <select id="filter-review-status" class="px-2.5 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-white outline-none">
+            <option value="ALL">ทุกสถานะรวมกัน</option>
+            <option value="PENDING_ADMIN">⏳ รอแอดมินตรวจทาน</option>
+            <option value="ADMIN_VERIFIED">🔵 ตรวจทานแล้ว (รออนุมัติแท็บ 4)</option>
+            <option value="APPROVED">🟢 อนุมัติตั้งจ่ายแล้ว</option>
+          </select>
           <select id="select-review-sheet" class="px-3 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-slate-50 min-w-[260px] outline-none focus:ring-2 focus:ring-indigo-500">
             <option value="">-- ยังไม่มีใบงาน --</option>
           </select>
           <button id="btn-prev-sheet" class="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold">◀ ก่อนหน้า</button>
           <button id="btn-next-sheet" class="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold">ถัดไป ▶</button>
+          <span id="review-sheet-status-badge" class="px-2.5 py-1 rounded-full text-[11px] font-black bg-amber-100 text-amber-800 border border-amber-300">
+            ⏳ รอแอดมินตรวจทาน
+          </span>
         </div>
         <div class="flex items-center gap-2">
           <button id="btn-rescan-current-sheet" class="px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold cursor-pointer">
@@ -601,8 +613,8 @@
               <div>รวมจำนวน: <strong id="review-total-units" class="text-base font-black text-indigo-700">0</strong> ชิ้น</div>
               <div>รวมค่าแรงใบนี้: <strong id="review-total-wage" class="text-lg font-black text-emerald-700">0.00</strong> บาท</div>
             </div>
-            <button type="button" id="btn-save-verified-sheet" class="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs sm:text-sm rounded-xl shadow-md transition flex items-center justify-center gap-2 cursor-pointer">
-              <span>✅ บันทึก & ยืนยันยอดใบงานนี้เข้าสรุปงวดจ่ายเงิน</span>
+            <button type="button" id="btn-save-verified-sheet" class="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs sm:text-sm rounded-xl shadow-md transition flex items-center justify-center gap-2 cursor-pointer">
+              <span>☑️ แอดมินตรวจทานเรียบร้อย (ส่งรออนุมัติในแท็บ 4)</span>
             </button>
           </div>
         </div>
@@ -611,9 +623,292 @@
     </div>
 
     <!-- ======================================================================= -->
-    <!-- TAB 4: 💰 15-DAY PAYROLL SUMMARY & WORKER SLIPS                         -->
+    <!-- TAB 4: 🛡️ APPROVER & AUDIT TRAIL (ผู้มีอำนาจอนุมัติ & รายงานแก้ไข)       -->
+    <!-- ======================================================================= -->
+    <div id="tab-panel-approval" class="tab-panel hidden space-y-6">
+
+      <!-- Top Approver Security & Summary Banner -->
+      <div class="bg-gradient-to-br from-slate-900 via-teal-950 to-slate-900 text-white rounded-3xl p-6 shadow-xl border border-teal-700/40 space-y-5">
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-white/10 pb-4">
+          <div class="space-y-1">
+            <div class="inline-flex items-center gap-2 px-3 py-0.5 rounded-full bg-teal-500/20 border border-teal-400/30 text-teal-200 text-[11px] font-black">
+              <span>🛡️ Two-Stage Maker-Checker Approval & Audit Trail</span>
+            </div>
+            <h2 class="text-xl sm:text-2xl font-black">
+              ระบบผู้มีอำนาจอนุมัติใบงาน & ตรวจสอบประวัติการแก้ไข (ก่อนเข้าตั้งจ่ายเงิน)
+            </h2>
+            <p class="text-xs text-slate-300">
+              ดึงข้อมูลที่แอดมินตรวจทานจากแท็บ 3 มาแสดงพร้อมรายงานจุดที่มีการแก้ไขเทียบกับต้นฉบับ AI สามารถแก้ไขซ้ำ อนุมัติทีละใบ หรือเลือกอนุมัติหลายใบพร้อมกันเพื่อส่งเข้าคำนวณจ่ายเงินในแท็บ 5
+            </p>
+          </div>
+
+          <!-- Approver PIN Lock / Unlock Controls -->
+          <div class="flex items-center gap-2 flex-wrap bg-white/10 p-2.5 rounded-2xl border border-white/15">
+            <span id="badge-approver-lock-state" class="px-3 py-1.5 rounded-xl text-xs font-black bg-amber-400/20 text-amber-200 border border-amber-400/40 flex items-center gap-1.5">
+              <span>🔒 โหมดผู้มีอำนาจอนุมัติ: ล็อกอยู่</span>
+            </span>
+            <button type="button" id="btn-approver-pin-toggle" class="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow transition cursor-pointer">
+              🔑 ใส่รหัส PIN อนุมัติ
+            </button>
+            <button type="button" id="btn-approver-pin-change" class="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-slate-200 font-bold text-xs rounded-xl border border-white/15 transition cursor-pointer" title="เปลี่ยนรหัส PIN 4 หลักสำหรับผู้มีอำนาจอนุมัติ">
+              ⚙️ เปลี่ยนรหัส PIN
+            </button>
+          </div>
+        </div>
+
+        <!-- 4 Status & Audit KPI Cards -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div class="bg-white/5 border border-white/10 p-3.5 rounded-2xl">
+            <span class="text-[11px] text-amber-300 font-bold block">⏳ 1. รอแอดมินตรวจ (แท็บ 3)</span>
+            <span id="app-kpi-pending-admin" class="text-2xl font-black text-amber-300 mt-1 block">0 ใบ</span>
+            <span class="text-[10px] text-slate-400">เพิ่งสแกนจาก AI ยังไม่กดส่ง</span>
+          </div>
+          <div class="bg-blue-500/20 border border-blue-400/40 p-3.5 rounded-2xl">
+            <span class="text-[11px] text-blue-200 font-bold block">🔵 2. รอผู้มีอำนาจอนุมัติ</span>
+            <span id="app-kpi-waiting-approval" class="text-2xl font-black text-white mt-1 block">0 ใบ</span>
+            <span id="app-kpi-waiting-wage" class="text-[10px] text-blue-200 font-bold">รวม 0 ฿</span>
+          </div>
+          <div class="bg-amber-500/15 border border-amber-400/30 p-3.5 rounded-2xl">
+            <span class="text-[11px] text-amber-200 font-bold block">✏️ 3. ใบงานที่มีการแก้ไขข้อมูล</span>
+            <span id="app-kpi-edited-sheets" class="text-2xl font-black text-amber-300 mt-1 block">0 ใบ</span>
+            <span class="text-[10px] text-slate-300">มีประวัติแก้ไขต่างจากที่ AI อ่าน</span>
+          </div>
+          <div class="bg-emerald-500/20 border border-emerald-400/40 p-3.5 rounded-2xl">
+            <span class="text-[11px] text-emerald-200 font-bold block">🟢 4. อนุมัติเข้าตั้งจ่ายแล้ว</span>
+            <span id="app-kpi-approved" class="text-2xl font-black text-emerald-300 mt-1 block">0 ใบ</span>
+            <span id="app-kpi-approved-wage" class="text-[10px] text-emerald-200 font-bold">พร้อมจ่ายในแท็บ 5: 0 ฿</span>
+          </div>
+        </div>
+
+        <!-- Filters & Batch Approval Bar -->
+        <div class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end text-xs pt-1">
+          <div class="sm:col-span-3">
+            <label class="block text-slate-300 font-bold mb-1">🗓️ กรองงวดจ่ายเงิน:</label>
+            <select id="filter-approval-period" class="w-full px-3 py-2 rounded-xl bg-white text-slate-900 font-black outline-none">
+              <option value="ALL">ทุกงวดรวมกัน (All Periods)</option>
+            </select>
+          </div>
+          <div class="sm:col-span-3">
+            <label class="block text-slate-300 font-bold mb-1">📌 สถานะใบงาน:</label>
+            <select id="filter-approval-status" class="w-full px-3 py-2 rounded-xl bg-white text-slate-900 font-bold outline-none">
+              <option value="WAITING_OR_PENDING">🔵 รอผู้มีอำนาจอนุมัติ + รอตรวจ</option>
+              <option value="ADMIN_VERIFIED">🔵 เฉพาะที่แอดมินตรวจทานแล้ว (รออนุมัติ)</option>
+              <option value="EDITED_ONLY">✏️ เฉพาะใบงานที่มีการแก้ไขข้อมูล</option>
+              <option value="APPROVED">🟢 อนุมัติเข้าตั้งจ่ายแล้ว</option>
+              <option value="ALL">แสดงทุกสถานะทั้งหมด</option>
+            </select>
+          </div>
+          <div class="sm:col-span-3">
+            <label class="block text-slate-300 font-bold mb-1">🔍 ค้นหาชื่อช่าง / วันที่:</label>
+            <input type="text" id="filter-approval-search" placeholder="พิมพ์ชื่อช่าง เช่น นุนุ, ไซ, บายมอญ..." class="w-full px-3 py-2 rounded-xl bg-white text-slate-900 font-bold outline-none">
+          </div>
+          <div class="sm:col-span-3 flex items-center gap-2">
+            <button type="button" id="btn-batch-approve-selected" class="flex-1 py-2 px-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-lg transition cursor-pointer">
+              ✅ อนุมัติที่เลือก (<span id="label-selected-approve-count">0</span>)
+            </button>
+            <button type="button" id="btn-batch-approve-all-period" class="py-2 px-3 bg-teal-500/30 hover:bg-teal-500/40 text-teal-100 border border-teal-400/40 font-bold text-xs rounded-xl transition cursor-pointer" title="อนุมัติใบงานที่แอดมินตรวจทานแล้วทั้งหมดในงวดที่เลือก">
+              ✅ อนุมัติทั้งงวด
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Approver Sheet Selector & Quick Navigation Bar -->
+      <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-xs font-black text-slate-700">🛡️ เลือกใบงานเพื่อตรวจทาน & อนุมัติ:</span>
+          <select id="select-approval-sheet" class="px-3 py-2 text-xs font-bold rounded-xl border border-slate-300 bg-slate-50 min-w-[280px] outline-none focus:ring-2 focus:ring-teal-500">
+            <option value="">-- เลือกใบงาน --</option>
+          </select>
+          <button type="button" id="btn-prev-approval-sheet" class="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold cursor-pointer">◀ ก่อนหน้า</button>
+          <button type="button" id="btn-next-approval-sheet" class="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold cursor-pointer">ถัดไป ▶</button>
+          <span id="approval-current-status-badge" class="px-2.5 py-1 rounded-full text-[11px] font-black bg-blue-100 text-blue-800 border border-blue-300">
+            🔵 รอผู้มีอำนาจอนุมัติ
+          </span>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <button type="button" id="btn-return-to-admin" class="px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold cursor-pointer">
+            ↩️ ตีกลับให้แอดมินตรวจใหม่
+          </button>
+          <button type="button" id="btn-approve-current-sheet-top" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow cursor-pointer">
+            ✅ อนุมัติใบงานนี้ & ไปใบถัดไป
+          </button>
+        </div>
+      </div>
+
+      <!-- Side-by-Side Approver Inspector & Audit Trail -->
+      <div id="approval-workspace" class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- Left 5 Cols: Original Job Sheet Photo -->
+        <div class="lg:col-span-5 bg-slate-900 rounded-2xl p-4 text-white flex flex-col justify-between space-y-3 h-[700px]">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-2.5 flex-wrap gap-2">
+            <span class="text-xs font-bold text-slate-300">🖼️ รูปใบงานต้นฉบับ (เทียบกับข้อมูลที่แอดมินส่งมา)</span>
+            <div class="flex items-center gap-1.5">
+              <button type="button" id="btn-app-zoom-out" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-xs font-bold">➖</button>
+              <span id="label-app-zoom-level" class="text-[11px] font-mono px-1.5">100%</span>
+              <button type="button" id="btn-app-zoom-in" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-xs font-bold">➕</button>
+              <button type="button" id="btn-app-rotate-img" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-xs font-bold">🔄 หมุน</button>
+              <button type="button" id="btn-app-reset-img" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-xs font-bold">รีเซ็ต</button>
+            </div>
+          </div>
+
+          <div class="image-viewer-stage flex-1 rounded-xl flex items-center justify-center overflow-auto relative">
+            <img id="approval-sheet-image" src="" alt="Job Sheet" class="max-w-full max-h-full object-contain">
+            <div id="approval-missing-image-box" class="hidden flex-col items-center justify-center text-center p-6 max-w-sm space-y-2 bg-slate-800/90 border border-slate-700 rounded-2xl">
+              <div class="text-3xl">📄</div>
+              <div class="text-sm font-black text-emerald-300">ใบงานนี้บันทึกเฉพาะตารางข้อมูล</div>
+              <p class="text-xs text-slate-300">สามารถตรวจสอบรายการและกดอนุมัติยอดด้านขวาได้เลยครับ</p>
+            </div>
+          </div>
+
+          <div class="text-[11px] text-slate-400 text-center">
+            ผู้มีอำนาจอนุมัติสามารถแก้ไขรายการในตารางฝั่งขวาได้โดยตรง ระบบจะบันทึกประวัติการแก้ไขไว้ทั้งหมด
+          </div>
+        </div>
+
+        <!-- Right 7 Cols: Audit Diff Report + Editable Header & Items + Approve Button -->
+        <div class="lg:col-span-7 bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex flex-col justify-between space-y-4">
+          <div class="space-y-4">
+
+            <!-- Audit Trail / Change Report Box -->
+            <div id="approval-audit-box" class="p-3.5 rounded-2xl border border-indigo-200 bg-indigo-50/70 space-y-2 text-xs">
+              <!-- Populated dynamically via JS -->
+            </div>
+
+            <!-- Editable Header: Worker, Date, Period -->
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200 text-xs">
+              <div>
+                <label class="block font-bold text-slate-600 mb-1">
+                  👷 ชื่อช่าง (<span id="approval-raw-worker" class="text-indigo-600 font-mono"></span>):
+                </label>
+                <select id="approval-select-worker" class="w-full px-2.5 py-2 rounded-xl border border-slate-300 font-bold bg-white text-slate-900"></select>
+                <div class="mt-1 flex items-center justify-between">
+                  <span id="approval-worker-dept-badge" class="px-2 py-0.5 rounded text-[10px] font-black bg-amber-100 text-amber-900 cursor-pointer" title="คลิกเพื่อสลับแผนกหุ้ม/เย็บ">แผนกหุ้ม</span>
+                </div>
+              </div>
+              <div>
+                <label class="block font-bold text-slate-600 mb-1">
+                  📅 วันที่ในใบงาน (<span id="approval-raw-date" class="font-mono text-slate-800"></span>):
+                </label>
+                <input type="date" id="approval-input-date" class="w-full px-2.5 py-2 rounded-xl border border-slate-300 font-bold bg-white">
+              </div>
+              <div>
+                <label class="block font-bold text-emerald-800 mb-1">
+                  🗓️ งวดจ่ายเงิน (ตัดวิก 15 วัน):
+                </label>
+                <select id="approval-select-period" class="w-full px-2.5 py-2 rounded-xl border-2 border-emerald-400 font-black bg-emerald-50/60 text-emerald-950"></select>
+              </div>
+            </div>
+
+            <!-- Special Note -->
+            <div class="flex items-center gap-2 text-xs">
+              <span class="font-bold text-slate-700 shrink-0">📝 หมายเหตุใบงาน:</span>
+              <input type="text" id="approval-input-note" placeholder="ไม่มีหมายเหตุ..." class="flex-1 px-3 py-1.5 rounded-xl border border-slate-300 bg-white font-bold text-slate-900">
+            </div>
+
+            <!-- Editable Items Table with Diff Highlighting -->
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <h4 class="font-black text-xs sm:text-sm text-slate-800">
+                  รายการผลิตในใบงาน (แถวสีเหลือง = รายการที่ถูกแก้ไขต่างจากที่ AI อ่านครั้งแรก)
+                </h4>
+                <button type="button" id="btn-add-approval-item" class="px-3 py-1 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-lg cursor-pointer">
+                  + เพิ่มแถวรายการ
+                </button>
+              </div>
+              <div class="overflow-x-auto border border-slate-200 rounded-xl max-h-[320px] overflow-y-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                  <thead class="bg-slate-100 text-slate-700 sticky top-0 z-10 border-b border-slate-200">
+                    <tr>
+                      <th class="py-2 px-2 w-8 text-center">#</th>
+                      <th class="py-2 px-2">คำในใบงาน + ประวัติแก้</th>
+                      <th class="py-2 px-2 w-48">SKU โรงงาน (แก้ไขได้)</th>
+                      <th class="py-2 px-2 w-20">สี/รหัสผ้า</th>
+                      <th class="py-2 px-2 w-14 text-center">จำนวน</th>
+                      <th class="py-2 px-2 w-20 text-right">ค่าแรง/ชิ้น</th>
+                      <th class="py-2 px-2 w-20 text-right">รวม (฿)</th>
+                      <th class="py-2 px-1 w-8 text-center">ลบ</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbody-approval-items" class="divide-y divide-slate-100">
+                    <!-- Populated via JS -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Footer Totals & Approve Actions -->
+          <div class="border-t border-slate-200 pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div class="flex items-center gap-4 text-xs">
+              <div>รวมจำนวน: <strong id="approval-total-units" class="text-base font-black text-indigo-700">0</strong> ชิ้น</div>
+              <div>รวมค่าแรงใบนี้: <strong id="approval-total-wage" class="text-lg font-black text-emerald-700">0.00</strong> บาท</div>
+            </div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <button type="button" id="btn-approver-save-edits" class="px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs rounded-xl shadow transition cursor-pointer">
+                💾 บันทึกการแก้ไข
+              </button>
+              <button type="button" id="btn-approve-current-sheet" class="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs sm:text-sm rounded-xl shadow-md transition flex items-center justify-center gap-2 cursor-pointer">
+                <span>✅ อนุมัติใบงานนี้เข้าตั้งจ่ายเงิน (Approve)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Batch Approval & Audit Overview Table -->
+      <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 class="font-black text-base text-slate-900">📋 ตารางรายการใบงานรออนุมัติ & รายงานการแก้ไขทั้งหมด</h3>
+            <p class="text-xs text-slate-500">ติ๊กถูกหน้าใบงานที่ต้องการเพื่อกดอนุมัติหลายใบพร้อมกัน หรือคลิกปุ่ม "🔍 เปิดตรวจ" เพื่อดูรูปเทียบข้างด้านบน</p>
+          </div>
+        </div>
+        <div class="overflow-x-auto border border-slate-200 rounded-xl max-h-[480px] overflow-y-auto">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead class="bg-slate-100 text-slate-700 sticky top-0 z-10 border-b border-slate-200">
+              <tr>
+                <th class="py-2.5 px-3 w-10 text-center">
+                  <input type="checkbox" id="chk-select-all-approval" class="rounded text-emerald-600 cursor-pointer" title="เลือกทั้งหมด">
+                </th>
+                <th class="py-2.5 px-3">วันที่ใบงาน</th>
+                <th class="py-2.5 px-3">งวดจ่ายเงิน</th>
+                <th class="py-2.5 px-3">ชื่อช่าง (แผนก)</th>
+                <th class="py-2.5 px-3 text-center">จำนวนชิ้น</th>
+                <th class="py-2.5 px-3 text-right">ยอดค่าแรง (฿)</th>
+                <th class="py-2.5 px-3">รายงานการแก้ไข (Audit Report)</th>
+                <th class="py-2.5 px-3 text-center">สถานะอนุมัติ</th>
+                <th class="py-2.5 px-3 text-center">จัดการ</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-approval-list" class="divide-y divide-slate-100">
+              <!-- Populated via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ======================================================================= -->
+    <!-- TAB 5: 💰 15-DAY PAYROLL SUMMARY & WORKER SLIPS                         -->
     <!-- ======================================================================= -->
     <div id="tab-panel-payroll" class="tab-panel hidden space-y-6">
+
+      <!-- Unapproved Sheets Warning Banner -->
+      <div id="payroll-unapproved-alert" class="hidden p-4 rounded-2xl border-2 border-amber-400 bg-amber-50 text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-sm">
+        <div class="space-y-0.5">
+          <div class="font-black text-sm flex items-center gap-2">
+            <span>⚠️ มีใบงานในงวดนี้ที่ยังรอผู้มีอำนาจอนุมัติอีก <span id="payroll-unapproved-count" class="underline">0</span> ใบ (ยอดรวม <span id="payroll-unapproved-wage">0</span> บาท)</span>
+          </div>
+          <p class="text-amber-800">
+            ตามกฎการควบคุมภายใน ระบบจะนำเฉพาะใบงานที่กด <strong>"✅ อนุมัติเข้าตั้งจ่ายแล้ว"</strong> ในแท็บ 4 มาคำนวณรวมในตารางจ่ายเงินและสลิปด้านล่างเท่านั้น
+          </p>
+        </div>
+        <button type="button" id="btn-goto-approval-tab" class="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl shadow shrink-0 cursor-pointer">
+          🛡️ ไปที่แท็บ 4 เพื่อตรวจ & อนุมัติใบงาน
+        </button>
+      </div>
 
       <!-- Top Payroll Dashboard Card -->
       <div class="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-6 shadow-xl border border-indigo-800/40 space-y-5">
@@ -987,7 +1282,7 @@
   </div>
 
   <!-- Scripts -->
-  <script src="payroll-db.js?v=2.5"></script>
-  <script src="app.js?v=2.5"></script>
+  <script src="payroll-db.js?v=2.6"></script>
+  <script src="app.js?v=2.6"></script>
 </body>
 </html>

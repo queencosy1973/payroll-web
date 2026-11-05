@@ -7,11 +7,16 @@
   // Application State
   let captureQueue = []; // { id, name, imageDataUrl, status: 'PENDING'|'PROCESSING'|'DONE'|'ERROR', errorMsg, sheetId }
   let activeSheetId = null;
+  let activeApprovalSheetId = null;
   let cameraStream = null;
   let imgZoom = 1;
   let imgRotation = 0;
+  let appImgZoom = 1;
+  let appImgRotation = 0;
+  let isApproverUnlocked = sessionStorage.getItem('qc_approver_unlocked_v1') === '1';
+  const selectedApprovalSheetIds = new Set();
 
-  // Chart.js Instances for Tab 5 Executive Dashboard
+  // Chart.js Instances for Tab 6 Executive Dashboard
   let chartMonthlyTrend = null;
   let chartSkuMix = null;
   let chartWorkerRank = null;
@@ -26,6 +31,7 @@
     initMappingTablesUI();
     initScannerAndCameraUI();
     initReviewWorkspaceUI();
+    initApprovalWorkspaceUI();
     initPayrollSummaryUI();
     initExecutiveDashboardUI();
     initCloudSyncUI();
@@ -93,6 +99,7 @@
       }
       if (!meta.isBackground || (meta.sheetsChangedFromCloud && !isTypingInInput && !activeSkuSearchState)) {
         renderReviewSelectorAndWorkspace();
+        renderApprovalWorkspace();
       }
     });
   }
@@ -102,6 +109,7 @@
     renderWorkerMappingTable();
     renderQueueList();
     renderReviewSelectorAndWorkspace();
+    renderApprovalWorkspace();
     renderPayrollDashboard();
     renderExecutiveDashboard();
     updateHeaderBadges();
@@ -141,6 +149,18 @@
     const sheets = PayrollDB.getSavedSheets();
     const sCount = document.getElementById('badge-sheets-count');
     if (sCount) sCount.textContent = `${sheets.length} ใบ`;
+
+    const appBadge = document.getElementById('badge-approval-count');
+    if (appBadge) {
+      const waitingCount = sheets.filter(s => !s.isDemo && s.status !== 'APPROVED').length;
+      if (waitingCount > 0) {
+        appBadge.className = 'px-1.5 py-0.5 text-[10px] font-black rounded-full bg-amber-100 text-amber-900 border border-amber-300';
+        appBadge.textContent = `${waitingCount} รออนุมัติ`;
+      } else {
+        appBadge.className = 'px-1.5 py-0.5 text-[10px] font-black rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300';
+        appBadge.textContent = 'อนุมัติครบ';
+      }
+    }
   }
 
   // ===========================================================================
@@ -160,9 +180,9 @@
     document.querySelectorAll('.nav-tab-btn').forEach(btn => {
       const isMatch = btn.getAttribute('data-tab') === tabName;
       if (isMatch) {
-        btn.className = 'nav-tab-btn py-3 px-4 text-xs sm:text-sm font-black border-b-2 border-emerald-600 text-emerald-700 flex items-center gap-2 whitespace-nowrap transition-colors';
+        btn.className = 'nav-tab-btn py-3 px-3.5 text-xs sm:text-sm font-black border-b-2 border-emerald-600 text-emerald-700 flex items-center gap-1.5 whitespace-nowrap transition-colors';
       } else {
-        btn.className = 'nav-tab-btn py-3 px-4 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-2 whitespace-nowrap transition-colors';
+        btn.className = 'nav-tab-btn py-3 px-3.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-600 hover:text-slate-900 flex items-center gap-1.5 whitespace-nowrap transition-colors';
       }
     });
 
@@ -176,6 +196,8 @@
 
     if (tabName === 'review') {
       renderReviewSelectorAndWorkspace();
+    } else if (tabName === 'approval') {
+      renderApprovalWorkspace();
     } else if (tabName === 'payroll') {
       renderPayrollDashboard();
     } else if (tabName === 'dashboard') {
@@ -1131,6 +1153,7 @@
   // TAB 3: SIDE-BY-SIDE REVIEW & VERIFY WORKSPACE
   // ===========================================================================
   function initReviewWorkspaceUI() {
+    const filterReviewStatus = document.getElementById('filter-review-status');
     const selectSheet = document.getElementById('select-review-sheet');
     const btnPrev = document.getElementById('btn-prev-sheet');
     const btnNext = document.getElementById('btn-next-sheet');
@@ -1148,6 +1171,16 @@
     if (btnRotate) btnRotate.addEventListener('click', () => { imgRotation = (imgRotation + 90) % 360; applyImageTransform(); });
     if (btnResetImg) btnResetImg.addEventListener('click', () => { imgZoom = 1; imgRotation = 0; applyImageTransform(); });
 
+    if (filterReviewStatus) {
+      filterReviewStatus.addEventListener('change', () => {
+        const filtered = getFilteredReviewSheets();
+        if (filtered.length > 0 && !filtered.some(s => s.id === activeSheetId)) {
+          activeSheetId = filtered[0].id;
+        }
+        renderReviewSelectorAndWorkspace();
+      });
+    }
+
     if (selectSheet) {
       selectSheet.addEventListener('change', () => {
         activeSheetId = selectSheet.value;
@@ -1157,7 +1190,7 @@
 
     if (btnPrev) {
       btnPrev.addEventListener('click', () => {
-        const sheets = PayrollDB.getSavedSheets();
+        const sheets = getFilteredReviewSheets();
         const idx = sheets.findIndex(s => s.id === activeSheetId);
         if (idx > 0) {
           activeSheetId = sheets[idx - 1].id;
@@ -1168,7 +1201,7 @@
 
     if (btnNext) {
       btnNext.addEventListener('click', () => {
-        const sheets = PayrollDB.getSavedSheets();
+        const sheets = getFilteredReviewSheets();
         const idx = sheets.findIndex(s => s.id === activeSheetId);
         if (idx >= 0 && idx < sheets.length - 1) {
           activeSheetId = sheets[idx + 1].id;
@@ -1433,10 +1466,35 @@
         const sheet = getActiveSheet();
         if (!sheet) return;
         syncReviewTableToSheetObject(sheet);
-        sheet.status = 'VERIFIED';
-        PayrollDB.upsertSheet(sheet);
+        sheet.status = 'ADMIN_VERIFIED';
+        sheet.adminVerifiedAt = new Date().toISOString();
+        PayrollDB.upsertSheet(sheet, false, {
+          actorRole: 'ADMIN',
+          actionLabel: 'แอดมินตรวจทานเรียบร้อย (ส่งรออนุมัติในแท็บ 4)',
+          recordActionEvenIfUnchanged: true
+        });
+        activeApprovalSheetId = sheet.id;
+
+        // Find next sheet that is still PENDING_ADMIN (or next sheet in list)
+        const allList = getFilteredReviewSheets();
+        const currIdx = allList.findIndex(s => s.id === sheet.id);
+        let nextSheet = null;
+        if (currIdx >= 0) {
+          for (let i = currIdx + 1; i < allList.length; i++) {
+            if (allList[i].status === 'PENDING_ADMIN') {
+              nextSheet = allList[i];
+              break;
+            }
+          }
+          if (!nextSheet && currIdx + 1 < allList.length) {
+            nextSheet = allList[currIdx + 1];
+          }
+        }
+        if (nextSheet) {
+          activeSheetId = nextSheet.id;
+        }
         refreshAllViews();
-        alert(`✅ บันทึกใบงานของคุณ "${sheet.workerName}" (รวม ${sheet.totalUnits} ชิ้น = ${sheet.totalWage.toLocaleString()} บาท) เข้าสรุปงวดจ่ายเงินเรียบร้อย!`);
+        alert(`☑️ แอดมินตรวจทานใบงานของคุณ "${sheet.workerName}" (${sheet.totalUnits} ชิ้น = ${sheet.totalWage.toLocaleString()} บาท) เรียบร้อยแล้ว!\n\n📌 ส่งต่อเข้าคิว "🛡️ 4. ผู้มีอำนาจอนุมัติ" เพื่อตรวจสอบและกดอนุมัติเข้าตั้งจ่ายเงินต่อไป`);
       });
     }
   }
@@ -1452,12 +1510,21 @@
     }
   }
 
+  function getFilteredReviewSheets() {
+    const all = PayrollDB.getSavedSheets();
+    const filterEl = document.getElementById('filter-review-status');
+    const statusFilter = filterEl ? filterEl.value : 'ALL';
+    if (!statusFilter || statusFilter === 'ALL') return all;
+    return all.filter(s => (s.status || 'ADMIN_VERIFIED') === statusFilter);
+  }
+
   function getActiveSheet() {
-    const sheets = PayrollDB.getSavedSheets();
-    if (sheets.length === 0) return null;
-    let found = sheets.find(s => s.id === activeSheetId);
+    const sheets = getFilteredReviewSheets();
+    const all = PayrollDB.getSavedSheets();
+    if (all.length === 0) return null;
+    let found = sheets.find(s => s.id === activeSheetId) || all.find(s => s.id === activeSheetId);
     if (!found) {
-      found = sheets[0];
+      found = sheets[0] || all[0];
       activeSheetId = found.id;
     }
     return found;
@@ -1477,13 +1544,37 @@
     return keys;
   }
 
+  function getStatusBadgeMeta(status) {
+    if (status === 'APPROVED') {
+      return {
+        label: '🟢 อนุมัติตั้งจ่ายแล้ว',
+        shortIcon: '🟢',
+        cls: 'px-2.5 py-1 rounded-full text-[11px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300'
+      };
+    }
+    if (status === 'PENDING_ADMIN') {
+      return {
+        label: '⏳ รอแอดมินตรวจทาน',
+        shortIcon: '⏳',
+        cls: 'px-2.5 py-1 rounded-full text-[11px] font-black bg-amber-100 text-amber-800 border border-amber-300'
+      };
+    }
+    return {
+      label: '🔵 ตรวจทานแล้ว (รออนุมัติแท็บ 4)',
+      shortIcon: '🔵',
+      cls: 'px-2.5 py-1 rounded-full text-[11px] font-black bg-blue-100 text-blue-800 border border-blue-300'
+    };
+  }
+
   function renderReviewSelectorAndWorkspace() {
-    const sheets = PayrollDB.getSavedSheets();
+    const allSheets = PayrollDB.getSavedSheets();
+    const sheets = getFilteredReviewSheets();
     const selectSheet = document.getElementById('select-review-sheet');
     const emptyState = document.getElementById('review-empty-state');
     const workspace = document.getElementById('review-workspace');
+    const statusBadge = document.getElementById('review-sheet-status-badge');
 
-    if (sheets.length === 0) {
+    if (allSheets.length === 0) {
       if (selectSheet) selectSheet.innerHTML = `<option value="">-- ยังไม่มีใบงาน --</option>`;
       if (emptyState) emptyState.classList.remove('hidden');
       if (workspace) workspace.classList.add('hidden');
@@ -1494,11 +1585,19 @@
     if (emptyState) emptyState.classList.add('hidden');
     if (workspace) workspace.classList.remove('hidden');
 
+    const listForSelect = sheets.length > 0 ? sheets : allSheets;
     if (selectSheet) {
-      selectSheet.innerHTML = sheets.map((s, i) => {
+      selectSheet.innerHTML = listForSelect.map((s, i) => {
         const pMeta = PayrollDB.getPeriodMetaFromKey(s.payrollPeriodKey);
-        return `<option value="${s.id}" ${s.id === sheet.id ? 'selected' : ''}>ใบที่ ${i + 1}: ${s.workerName} (${s.sheetDate}) - ${s.totalUnits || 0} ชิ้น / ${(s.totalWage || 0).toLocaleString()}฿ [${pMeta.periodLabel}]</option>`;
+        const stMeta = getStatusBadgeMeta(s.status);
+        return `<option value="${s.id}" ${s.id === sheet.id ? 'selected' : ''}>${stMeta.shortIcon} ใบที่ ${i + 1}: ${s.workerName} (${s.sheetDate}) - ${s.totalUnits || 0} ชิ้น / ${(s.totalWage || 0).toLocaleString()}฿ [${pMeta.periodLabel}]</option>`;
       }).join('');
+    }
+
+    if (statusBadge && sheet) {
+      const stMeta = getStatusBadgeMeta(sheet.status);
+      statusBadge.className = stMeta.cls;
+      statusBadge.textContent = stMeta.label;
     }
 
     // Image (Lazy-loaded on demand from IndexedDB / QC_PAYROLL_IMAGE; NEVER fallback to sample Blai Morn photo for real sheets!)
@@ -1937,13 +2036,13 @@
       inputEl.value = formatSkuDisplay(chosenSku);
       closeSkuSearchPortal(false);
       syncReviewTableToSheetObject(sheet);
-      PayrollDB.upsertSheet(sheet);
+      PayrollDB.upsertSheet(sheet, false, { actorRole: 'ADMIN' });
       renderReviewSelectorAndWorkspace();
       const btnSaveSheet = document.getElementById('btn-save-verified-sheet');
       if (btnSaveSheet) {
-        btnSaveSheet.innerHTML = '<span>✅ บันทึก SKU อัตโนมัติแล้ว! (กดยืนยันใบงานได้)</span>';
+        btnSaveSheet.innerHTML = '<span>✅ บันทึก SKU อัตโนมัติแล้ว! (กดยืนยันตรวจทานได้)</span>';
         setTimeout(() => {
-          btnSaveSheet.innerHTML = '<span>✅ บันทึก & ยืนยันยอดใบงานนี้เข้าสรุปงวดจ่ายเงิน</span>';
+          btnSaveSheet.innerHTML = '<span>☑️ แอดมินตรวจทานเรียบร้อย (ส่งรออนุมัติในแท็บ 4)</span>';
         }, 2500);
       }
     };
@@ -2105,7 +2204,757 @@
   }
 
   // ===========================================================================
-  // TAB 4: 15-DAY PAYROLL SUMMARY, SLIPS & EXCEL EXPORT
+  // TAB 4: 🛡️ APPROVER & AUDIT TRAIL (ผู้มีอำนาจอนุมัติ & รายงานแก้ไข)
+  // ===========================================================================
+  function ensureApproverUnlocked(actionText = 'อนุมัติใบงานเข้าตั้งจ่ายเงิน') {
+    if (isApproverUnlocked) return true;
+    const cfg = PayrollDB.getConfig();
+    const expectedPin = String(cfg.approverPin || '1973').trim();
+    const entered = prompt(`🔐 กรุณาใส่รหัส PIN ผู้มีอำนาจอนุมัติเพื่อ "${actionText}"\n(ค่าเริ่มต้น: 1973 — สามารถเปลี่ยนรหัสได้ที่ปุ่ม ⚙️ เปลี่ยนรหัส PIN):`, '');
+    if (entered === null) return false;
+    if (String(entered).trim() === expectedPin) {
+      isApproverUnlocked = true;
+      sessionStorage.setItem('qc_approver_unlocked_v1', '1');
+      updateApproverPinLockBadge();
+      return true;
+    }
+    alert('❌ รหัส PIN ไม่ถูกต้อง กรุณาลองใหม่อีกครั้งครับ');
+    return false;
+  }
+
+  function updateApproverPinLockBadge() {
+    const badge = document.getElementById('badge-approver-lock-state');
+    const btnToggle = document.getElementById('btn-approver-pin-toggle');
+    if (badge) {
+      if (isApproverUnlocked) {
+        badge.className = 'px-3 py-1.5 rounded-xl text-xs font-black bg-emerald-400/20 text-emerald-200 border border-emerald-400/40 flex items-center gap-1.5';
+        badge.innerHTML = '<span>🔓 โหมดผู้มีอำนาจอนุมัติ: ปลดล็อกพร้อมอนุมัติแล้ว</span>';
+      } else {
+        badge.className = 'px-3 py-1.5 rounded-xl text-xs font-black bg-amber-400/20 text-amber-200 border border-amber-400/40 flex items-center gap-1.5';
+        badge.innerHTML = '<span>🔒 โหมดผู้มีอำนาจอนุมัติ: ล็อกอยู่ (ป้องกันแอดมินกดอนุมัติเอง)</span>';
+      }
+    }
+    if (btnToggle) {
+      if (isApproverUnlocked) {
+        btnToggle.className = 'px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs rounded-xl shadow transition cursor-pointer';
+        btnToggle.textContent = '🔒 ล็อกโหมดอนุมัติ';
+      } else {
+        btnToggle.className = 'px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow transition cursor-pointer';
+        btnToggle.textContent = '🔑 ใส่รหัส PIN อนุมัติ';
+      }
+    }
+  }
+
+  function applyApprovalImageTransform() {
+    const img = document.getElementById('approval-sheet-image');
+    const lbl = document.getElementById('label-app-zoom-level');
+    if (img) {
+      img.style.transform = `scale(${appImgZoom}) rotate(${appImgRotation}deg)`;
+    }
+    if (lbl) {
+      lbl.textContent = `${Math.round(appImgZoom * 100)}%`;
+    }
+  }
+
+  function getFilteredApprovalSheets() {
+    const all = PayrollDB.getSavedSheets();
+    const filterPeriod = document.getElementById('filter-approval-period');
+    const filterStatus = document.getElementById('filter-approval-status');
+    const filterSearch = document.getElementById('filter-approval-search');
+
+    const periodVal = filterPeriod ? filterPeriod.value : 'ALL';
+    const statusVal = filterStatus ? filterStatus.value : 'WAITING_OR_PENDING';
+    const searchQ = (filterSearch ? filterSearch.value : '').trim().toLowerCase();
+
+    return all.filter(s => {
+      if (periodVal && periodVal !== 'ALL' && s.payrollPeriodKey !== periodVal) return false;
+      if (statusVal === 'WAITING_OR_PENDING') {
+        if (s.status === 'APPROVED') return false;
+      } else if (statusVal === 'ADMIN_VERIFIED') {
+        if (s.status !== 'ADMIN_VERIFIED') return false;
+      } else if (statusVal === 'EDITED_ONLY') {
+        const audit = PayrollDB.computeSheetAuditReport(s);
+        if (!audit.hasChanges) return false;
+      } else if (statusVal === 'APPROVED') {
+        if (s.status !== 'APPROVED') return false;
+      }
+      if (searchQ) {
+        const hay = `${s.workerCode} ${s.workerName} ${s.rawWorkerName} ${s.sheetDate}`.toLowerCase();
+        if (!hay.includes(searchQ)) return false;
+      }
+      return true;
+    });
+  }
+
+  function getActiveApprovalSheet() {
+    const filtered = getFilteredApprovalSheets();
+    const all = PayrollDB.getSavedSheets();
+    if (all.length === 0) return null;
+    let found = filtered.find(s => s.id === activeApprovalSheetId) || all.find(s => s.id === activeApprovalSheetId);
+    if (!found) {
+      found = filtered[0] || all[0];
+      activeApprovalSheetId = found ? found.id : null;
+    }
+    return found;
+  }
+
+  function syncApprovalTableToSheetObject(sheet) {
+    const tbody = document.getElementById('tbody-approval-items');
+    if (!tbody || !sheet) return;
+    const selectWorker = document.getElementById('approval-select-worker');
+    if (selectWorker && selectWorker.value) {
+      const w = PayrollDB.getWorkerMappings().find(x => x.code === selectWorker.value);
+      if (w) {
+        sheet.workerCode = w.code;
+        sheet.workerName = w.name;
+        sheet.workerDept = w.dept;
+        sheet.isWorkerMatched = true;
+      }
+    }
+    const inputDate = document.getElementById('approval-input-date');
+    if (inputDate && inputDate.value) {
+      sheet.sheetDate = inputDate.value;
+    }
+    const selectPeriod = document.getElementById('approval-select-period');
+    if (selectPeriod && selectPeriod.value) {
+      sheet.payrollPeriodKey = selectPeriod.value;
+    }
+    const inputNote = document.getElementById('approval-input-note');
+    if (inputNote) sheet.specialNote = inputNote.value.trim();
+
+    const rows = tbody.querySelectorAll('tr[data-app-item-idx]');
+    const newItems = [];
+    rows.forEach((tr, i) => {
+      const prevItem = (sheet.items && sheet.items[i]) || {};
+      const rawModel = (tr.querySelector('.app-item-raw')?.value || '').trim();
+      const matchedSku = (tr.querySelector('.app-item-sku')?.value || '').trim().toLowerCase();
+      const color = (tr.querySelector('.app-item-color')?.value || '').trim();
+      const qty = Math.max(1, parseInt(tr.querySelector('.app-item-qty')?.value, 10) || 1);
+
+      newItems.push({
+        ...prevItem,
+        rowNo: i + 1,
+        rawModel,
+        matchedSku,
+        color,
+        qty
+      });
+    });
+    sheet.items = newItems;
+  }
+
+  function initApprovalWorkspaceUI() {
+    updateApproverPinLockBadge();
+
+    const btnPinToggle = document.getElementById('btn-approver-pin-toggle');
+    if (btnPinToggle) {
+      btnPinToggle.addEventListener('click', () => {
+        if (isApproverUnlocked) {
+          isApproverUnlocked = false;
+          sessionStorage.removeItem('qc_approver_unlocked_v1');
+          updateApproverPinLockBadge();
+        } else {
+          ensureApproverUnlocked('ปลดล็อกโหมดผู้มีอำนาจอนุมัติ');
+        }
+      });
+    }
+
+    const btnPinChange = document.getElementById('btn-approver-pin-change');
+    if (btnPinChange) {
+      btnPinChange.addEventListener('click', () => {
+        if (!ensureApproverUnlocked('เปลี่ยนรหัส PIN ผู้มีอำนาจอนุมัติ')) return;
+        const cfg = PayrollDB.getConfig();
+        const newPin = prompt('🔑 กรอกรหัส PIN ใหม่ (4–8 หลัก) สำหรับผู้มีอำนาจอนุมัติ:', cfg.approverPin || '1973');
+        if (newPin && String(newPin).trim().length >= 4) {
+          PayrollDB.saveConfig({ approverPin: String(newPin).trim() });
+          alert(`✅ เปลี่ยนรหัส PIN ผู้มีอำนาจอนุมัติเป็น "${String(newPin).trim()}" และซิงค์ขึ้น Cloud เรียบร้อยแล้ว!`);
+        }
+      });
+    }
+
+    // Zoom & Rotate in Tab 4
+    document.getElementById('btn-app-zoom-in')?.addEventListener('click', () => { appImgZoom = Math.min(3, appImgZoom + 0.25); applyApprovalImageTransform(); });
+    document.getElementById('btn-app-zoom-out')?.addEventListener('click', () => { appImgZoom = Math.max(0.5, appImgZoom - 0.25); applyApprovalImageTransform(); });
+    document.getElementById('btn-app-rotate-img')?.addEventListener('click', () => { appImgRotation = (appImgRotation + 90) % 360; applyApprovalImageTransform(); });
+    document.getElementById('btn-app-reset-img')?.addEventListener('click', () => { appImgZoom = 1; appImgRotation = 0; applyApprovalImageTransform(); });
+
+    // Filters in Tab 4
+    ['filter-approval-period', 'filter-approval-status'].forEach(id => {
+      document.getElementById(id)?.addEventListener('change', () => {
+        const list = getFilteredApprovalSheets();
+        if (list.length > 0 && !list.some(s => s.id === activeApprovalSheetId)) {
+          activeApprovalSheetId = list[0].id;
+        }
+        renderApprovalWorkspace();
+      });
+    });
+    document.getElementById('filter-approval-search')?.addEventListener('input', () => {
+      renderApprovalWorkspace();
+    });
+
+    // Sheet Selector & Prev/Next in Tab 4
+    const selectAppSheet = document.getElementById('select-approval-sheet');
+    if (selectAppSheet) {
+      selectAppSheet.addEventListener('change', () => {
+        activeApprovalSheetId = selectAppSheet.value;
+        renderApprovalWorkspace();
+      });
+    }
+    document.getElementById('btn-prev-approval-sheet')?.addEventListener('click', () => {
+      const list = getFilteredApprovalSheets();
+      const idx = list.findIndex(s => s.id === activeApprovalSheetId);
+      if (idx > 0) {
+        activeApprovalSheetId = list[idx - 1].id;
+        renderApprovalWorkspace();
+      }
+    });
+    document.getElementById('btn-next-approval-sheet')?.addEventListener('click', () => {
+      const list = getFilteredApprovalSheets();
+      const idx = list.findIndex(s => s.id === activeApprovalSheetId);
+      if (idx >= 0 && idx < list.length - 1) {
+        activeApprovalSheetId = list[idx + 1].id;
+        renderApprovalWorkspace();
+      }
+    });
+
+    // Editable Header in Tab 4
+    document.getElementById('approval-select-worker')?.addEventListener('change', (e) => {
+      const sheet = getActiveApprovalSheet();
+      if (!sheet) return;
+      const w = PayrollDB.getWorkerMappings().find(x => x.code === e.target.value);
+      if (w) {
+        sheet.workerCode = w.code;
+        sheet.workerName = w.name;
+        sheet.workerDept = w.dept;
+        PayrollDB.upsertSheet(sheet, false, { actorRole: 'APPROVER' });
+        refreshAllViews();
+      }
+    });
+
+    document.getElementById('approval-worker-dept-badge')?.addEventListener('click', () => {
+      const sheet = getActiveApprovalSheet();
+      if (!sheet) return;
+      const nextDept = sheet.workerDept === 'เย็บ' ? 'หุ้ม' : 'เย็บ';
+      sheet.workerDept = nextDept;
+      if (typeof PayrollDB.setWorkerDepartment === 'function') {
+        PayrollDB.setWorkerDepartment(sheet.workerCode || sheet.workerName, nextDept);
+      }
+      PayrollDB.upsertSheet(sheet, false, { actorRole: 'APPROVER' });
+      refreshAllViews();
+    });
+
+    document.getElementById('approval-input-date')?.addEventListener('change', (e) => {
+      const sheet = getActiveApprovalSheet();
+      if (!sheet) return;
+      sheet.sheetDate = e.target.value;
+      const p = PayrollDB.calculatePayrollPeriod(sheet.sheetDate);
+      sheet.payrollPeriodKey = p.periodKey;
+      PayrollDB.upsertSheet(sheet, false, { actorRole: 'APPROVER' });
+      refreshAllViews();
+    });
+
+    document.getElementById('approval-select-period')?.addEventListener('change', (e) => {
+      const sheet = getActiveApprovalSheet();
+      if (!sheet) return;
+      sheet.payrollPeriodKey = e.target.value;
+      PayrollDB.upsertSheet(sheet, false, { actorRole: 'APPROVER' });
+      refreshAllViews();
+    });
+
+    document.getElementById('approval-input-note')?.addEventListener('change', (e) => {
+      const sheet = getActiveApprovalSheet();
+      if (!sheet) return;
+      sheet.specialNote = e.target.value.trim();
+      PayrollDB.upsertSheet(sheet, false, { actorRole: 'APPROVER' });
+      refreshAllViews();
+    });
+
+    document.getElementById('btn-add-approval-item')?.addEventListener('click', () => {
+      const sheet = getActiveApprovalSheet();
+      if (!sheet) return;
+      syncApprovalTableToSheetObject(sheet);
+      sheet.items.push({
+        rowNo: sheet.items.length + 1,
+        rawModel: '',
+        matchedSku: 'ln3',
+        skuName: '',
+        isMatched: true,
+        color: '',
+        qty: 1,
+        unitRate: 0,
+        lineTotal: 0
+      });
+      PayrollDB.upsertSheet(sheet, false, { actorRole: 'APPROVER' });
+      renderApprovalWorkspace();
+    });
+
+    document.getElementById('btn-approver-save-edits')?.addEventListener('click', () => {
+      const sheet = getActiveApprovalSheet();
+      if (!sheet) return;
+      syncApprovalTableToSheetObject(sheet);
+      PayrollDB.upsertSheet(sheet, false, {
+        actorRole: 'APPROVER',
+        actionLabel: 'ผู้มีอำนาจอนุมัติบันทึกการแก้ไข',
+        keepApprovedStatus: true
+      });
+      refreshAllViews();
+      alert(`💾 บันทึกการแก้ไขใบงานของ "${sheet.workerName}" (${sheet.sheetDate}) เรียบร้อยแล้ว!`);
+    });
+
+    const handleApproveCurrentSheet = () => {
+      const sheet = getActiveApprovalSheet();
+      if (!sheet) return;
+      if (!ensureApproverUnlocked(`อนุมัติใบงานของ ${sheet.workerName}`)) return;
+
+      syncApprovalTableToSheetObject(sheet);
+      sheet.status = 'APPROVED';
+      sheet.approvedAt = new Date().toISOString();
+      sheet.approvedBy = 'ผู้มีอำนาจอนุมัติ';
+      PayrollDB.upsertSheet(sheet, false, {
+        actorRole: 'APPROVER',
+        actionLabel: '✅ อนุมัติใบงานเข้าตั้งจ่ายเงิน',
+        recordActionEvenIfUnchanged: true,
+        keepApprovedStatus: true
+      });
+
+      // Advance to next unapproved sheet in current filtered view
+      const allInFilter = getFilteredApprovalSheets();
+      const nextWaiting = allInFilter.find(s => s.id !== sheet.id && s.status !== 'APPROVED') || allInFilter[0];
+      if (nextWaiting) {
+        activeApprovalSheetId = nextWaiting.id;
+      }
+      refreshAllViews();
+    };
+
+    document.getElementById('btn-approve-current-sheet')?.addEventListener('click', handleApproveCurrentSheet);
+    document.getElementById('btn-approve-current-sheet-top')?.addEventListener('click', handleApproveCurrentSheet);
+
+    document.getElementById('btn-return-to-admin')?.addEventListener('click', () => {
+      const sheet = getActiveApprovalSheet();
+      if (!sheet) return;
+      const reason = prompt(`↩️ ระบุเหตุผลที่ตีกลับใบงานของ "${sheet.workerName}" ให้แอดมินตรวจสอบใหม่ (เว้นว่างได้):`, '');
+      if (reason === null) return;
+      syncApprovalTableToSheetObject(sheet);
+      sheet.status = 'PENDING_ADMIN';
+      PayrollDB.upsertSheet(sheet, false, {
+        actorRole: 'APPROVER',
+        actionLabel: reason.trim() ? `↩️ ตีกลับให้แอดมินตรวจใหม่: ${reason.trim()}` : '↩️ ตีกลับให้แอดมินตรวจใหม่',
+        recordActionEvenIfUnchanged: true
+      });
+      refreshAllViews();
+      alert(`↩️ ตีกลับใบงานของ "${sheet.workerName}" กลับไปสถานะ "⏳ รอแอดมินตรวจทาน" ในแท็บ 3 เรียบร้อยแล้ว`);
+    });
+
+    // Select All checkbox in Batch Approval Table
+    const chkSelectAll = document.getElementById('chk-select-all-approval');
+    if (chkSelectAll) {
+      chkSelectAll.addEventListener('change', () => {
+        const filtered = getFilteredApprovalSheets();
+        if (chkSelectAll.checked) {
+          filtered.forEach(s => selectedApprovalSheetIds.add(s.id));
+        } else {
+          filtered.forEach(s => selectedApprovalSheetIds.delete(s.id));
+        }
+        renderApprovalWorkspace();
+      });
+    }
+
+    // Batch Approve Selected
+    document.getElementById('btn-batch-approve-selected')?.addEventListener('click', () => {
+      const ids = Array.from(selectedApprovalSheetIds);
+      if (ids.length === 0) {
+        alert('กรุณาติ๊กถูกเลือกใบงานในตารางด้านล่างอย่างน้อย 1 ใบก่อนกดอนุมัติที่เลือกครับ');
+        return;
+      }
+      if (!ensureApproverUnlocked(`อนุมัติใบงานที่เลือกจำนวน ${ids.length} ใบ`)) return;
+      const count = PayrollDB.approveSheetsBatch(ids, 'ผู้มีอำนาจอนุมัติ (อนุมัติกลุ่ม)');
+      selectedApprovalSheetIds.clear();
+      if (chkSelectAll) chkSelectAll.checked = false;
+      refreshAllViews();
+      alert(`✅ อนุมัติใบงานเข้าตั้งจ่ายเงินสำเร็จจำนวน ${count} ใบ!\nยอดเงินถูกส่งเข้าแท็บ "💰 5. สรุปงวดจ่ายค่าแรง 15 วัน" เรียบร้อยแล้วครับ`);
+    });
+
+    // Batch Approve All in Selected Period
+    document.getElementById('btn-batch-approve-all-period')?.addEventListener('click', () => {
+      const filteredWaiting = getFilteredApprovalSheets().filter(s => s.status !== 'APPROVED');
+      if (filteredWaiting.length === 0) {
+        alert('ใบงานในตัวกรองปัจจุบันได้รับการอนุมัติครบทุกใบแล้วครับ!');
+        return;
+      }
+      const totalWage = filteredWaiting.reduce((acc, s) => acc + (s.totalWage || 0), 0);
+      if (!ensureApproverUnlocked(`อนุมัติใบงานทั้งงวดจำนวน ${filteredWaiting.length} ใบ`)) return;
+      if (!confirm(`ยืนยันอนุมัติใบงานทั้งหมด ${filteredWaiting.length} ใบ (ยอดรวม ${totalWage.toLocaleString()} บาท) เข้าตั้งจ่ายเงินในแท็บ 5 ใช่หรือไม่?`)) {
+        return;
+      }
+      const count = PayrollDB.approveSheetsBatch(filteredWaiting.map(s => s.id), 'ผู้มีอำนาจอนุมัติ (อนุมัติทั้งงวด)');
+      selectedApprovalSheetIds.clear();
+      refreshAllViews();
+      alert(`✅ อนุมัติใบงานทั้งงวดสำเร็จจำนวน ${count} ใบ (รวม ${totalWage.toLocaleString()} บาท) เข้าสู่ระบบตั้งจ่ายเงินเรียบร้อยแล้ว!`);
+    });
+  }
+
+  function renderApprovalWorkspace() {
+    updateApproverPinLockBadge();
+    const allSheets = PayrollDB.getSavedSheets().filter(s => !s.isDemo);
+
+    // Populate period filter
+    const filterPeriod = document.getElementById('filter-approval-period');
+    if (filterPeriod) {
+      const currVal = filterPeriod.value || 'ALL';
+      const uniquePeriods = Array.from(new Set(allSheets.map(s => s.payrollPeriodKey).filter(Boolean))).sort().reverse();
+      filterPeriod.innerHTML = [
+        `<option value="ALL">ทุกงวดรวมกัน (${allSheets.length} ใบงาน)</option>`,
+        ...uniquePeriods.map(pk => {
+          const meta = PayrollDB.getPeriodMetaFromKey(pk);
+          return `<option value="${pk}" ${pk === currVal ? 'selected' : ''}>${meta.periodLabel}</option>`;
+        })
+      ].join('');
+    }
+
+    const periodFilterVal = filterPeriod ? filterPeriod.value : 'ALL';
+    const periodScopedSheets = allSheets.filter(s => periodFilterVal === 'ALL' || s.payrollPeriodKey === periodFilterVal);
+
+    // Calculate KPI counts for periodScopedSheets
+    let pendingAdminCount = 0;
+    let waitingApprovalCount = 0;
+    let waitingApprovalWage = 0;
+    let editedSheetsCount = 0;
+    let approvedCount = 0;
+    let approvedWage = 0;
+
+    periodScopedSheets.forEach(s => {
+      const audit = PayrollDB.computeSheetAuditReport(s);
+      if (audit.hasChanges) editedSheetsCount++;
+      if (s.status === 'PENDING_ADMIN') {
+        pendingAdminCount++;
+        waitingApprovalWage += (s.totalWage || 0);
+      } else if (s.status === 'APPROVED') {
+        approvedCount++;
+        approvedWage += (s.totalWage || 0);
+      } else {
+        waitingApprovalCount++;
+        waitingApprovalWage += (s.totalWage || 0);
+      }
+    });
+
+    const elPending = document.getElementById('app-kpi-pending-admin');
+    const elWaiting = document.getElementById('app-kpi-waiting-approval');
+    const elWaitingWage = document.getElementById('app-kpi-waiting-wage');
+    const elEdited = document.getElementById('app-kpi-edited-sheets');
+    const elApproved = document.getElementById('app-kpi-approved');
+    const elApprovedWage = document.getElementById('app-kpi-approved-wage');
+
+    if (elPending) elPending.textContent = `${pendingAdminCount} ใบ`;
+    if (elWaiting) elWaiting.textContent = `${waitingApprovalCount} ใบ`;
+    if (elWaitingWage) elWaitingWage.textContent = `ยอดรออนุมัติรวม ${(waitingApprovalWage).toLocaleString()} ฿`;
+    if (elEdited) elEdited.textContent = `${editedSheetsCount} ใบ`;
+    if (elApproved) elApproved.textContent = `${approvedCount} ใบ`;
+    if (elApprovedWage) elApprovedWage.textContent = `พร้อมจ่ายในแท็บ 5: ${(approvedWage).toLocaleString()} ฿`;
+
+    const filteredSheets = getFilteredApprovalSheets();
+    const sheet = getActiveApprovalSheet();
+
+    // Update Selected Approve Count label
+    const lblSelCount = document.getElementById('label-selected-approve-count');
+    if (lblSelCount) lblSelCount.textContent = String(selectedApprovalSheetIds.size);
+
+    // Populate Sheet Selector dropdown in Tab 4
+    const selectAppSheet = document.getElementById('select-approval-sheet');
+    const listForSelect = filteredSheets.length > 0 ? filteredSheets : allSheets;
+    if (selectAppSheet) {
+      if (listForSelect.length === 0) {
+        selectAppSheet.innerHTML = `<option value="">-- ไม่มีใบงานในตัวกรองนี้ --</option>`;
+      } else {
+        selectAppSheet.innerHTML = listForSelect.map((s, idx) => {
+          const stMeta = getStatusBadgeMeta(s.status);
+          const audit = PayrollDB.computeSheetAuditReport(s);
+          const editTag = audit.hasChanges ? ` [✏️ แก้ไข ${audit.totalDiffCount} จุด]` : ' [✨ ตรงตาม AI]';
+          return `<option value="${s.id}" ${sheet && s.id === sheet.id ? 'selected' : ''}>${stMeta.shortIcon} ใบที่ ${idx + 1}: ${s.workerName} (${s.sheetDate}) - ${s.totalUnits || 0} ชิ้น / ${(s.totalWage || 0).toLocaleString()}฿${editTag}</option>`;
+        }).join('');
+      }
+    }
+
+    // Render Side-by-Side Inspector for `sheet`
+    if (sheet) {
+      const statusBadge = document.getElementById('approval-current-status-badge');
+      if (statusBadge) {
+        const stMeta = getStatusBadgeMeta(sheet.status);
+        statusBadge.className = stMeta.cls;
+        statusBadge.textContent = stMeta.label;
+      }
+
+      // Image
+      const imgEl = document.getElementById('approval-sheet-image');
+      const missingBox = document.getElementById('approval-missing-image-box');
+      const applyAppImg = (dataUrl) => {
+        if (!imgEl) return;
+        if (dataUrl) {
+          imgEl.src = dataUrl;
+          imgEl.classList.remove('hidden');
+          if (missingBox) missingBox.classList.add('hidden');
+        } else {
+          imgEl.removeAttribute('src');
+          imgEl.classList.add('hidden');
+          if (missingBox) missingBox.classList.remove('hidden');
+        }
+      };
+      if (sheet.imageDataUrl) {
+        applyAppImg(sheet.imageDataUrl);
+      } else if (typeof PayrollDB.fetchSheetImage === 'function' && !sheet.isDemo) {
+        const targetId = sheet.id;
+        PayrollDB.fetchSheetImage(targetId).then(url => {
+          const curr = getActiveApprovalSheet();
+          if (curr && curr.id === targetId) applyAppImg(url);
+        });
+      } else {
+        applyAppImg('');
+      }
+
+      // Audit Trail Box
+      const auditBox = document.getElementById('approval-audit-box');
+      const audit = PayrollDB.computeSheetAuditReport(sheet);
+      if (auditBox) {
+        if (!audit.hasChanges) {
+          auditBox.className = 'p-3.5 rounded-2xl border border-emerald-200 bg-emerald-50/70 space-y-1.5 text-xs';
+          auditBox.innerHTML = `
+            <div class="font-black text-emerald-900 flex items-center justify-between">
+              <span>✨ รายงานตรวจสอบการแก้ไข (Audit Report): ข้อมูลตรงตามที่ AI อ่าน 100% (ไม่มีการแก้ไขรายการ)</span>
+              <span class="px-2 py-0.5 rounded-full bg-emerald-200/70 text-emerald-900 text-[10px] font-black">0 จุดแก้ไข</span>
+            </div>
+            <p class="text-[11px] text-emerald-700">สามารถตรวจสอบความถูกต้องกับรูปใบงานฝั่งซ้าย แล้วกดปุ่ม <strong>"✅ อนุมัติใบงานนี้เข้าตั้งจ่ายเงิน"</strong> ได้เลยครับ</p>
+          `;
+        } else {
+          const netDiffItemsHtml = (audit.netDiffs || []).map(d =>
+            `<li class="flex items-start gap-1.5"><span class="text-amber-600 font-black">•</span><span class="font-bold text-slate-900">${escapeHtml(d.summary)}</span></li>`
+          ).join('');
+          const historyHtml = (audit.editHistory || []).slice(-5).map(h => {
+            const timeStr = h.at ? new Date(h.at).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' }) : '';
+            const roleBadge = h.role === 'APPROVER'
+              ? '<span class="px-1.5 py-0.5 rounded bg-teal-100 text-teal-800 font-black text-[10px]">🛡️ ผู้อนุมัติ</span>'
+              : '<span class="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 font-black text-[10px]">👩‍💻 แอดมิน</span>';
+            const detailText = (h.diffs && h.diffs.length > 0) ? `: ${escapeHtml(h.diffs.join(' ; '))}` : '';
+            return `<div class="text-[11px] text-slate-700 flex items-center gap-1.5 flex-wrap">${roleBadge} <span class="font-bold">${escapeHtml(h.label || '')}</span> <span class="text-slate-500">(${escapeHtml(timeStr)})</span> ${detailText}</div>`;
+          }).join('');
+
+          auditBox.className = 'p-3.5 rounded-2xl border-2 border-amber-300 bg-amber-50/90 space-y-2 text-xs';
+          auditBox.innerHTML = `
+            <div class="font-black text-amber-950 flex items-center justify-between">
+              <span>✏️ รายงานจุดที่มีการแก้ไขในใบงานนี้ (พบการแก้ไข ${audit.totalDiffCount} จุด)</span>
+              <span class="px-2 py-0.5 rounded-full bg-amber-200 text-amber-950 text-[10px] font-black">มีประวัติแก้ไข</span>
+            </div>
+            ${netDiffItemsHtml ? `<ul class="space-y-1 pl-1">${netDiffItemsHtml}</ul>` : ''}
+            ${historyHtml ? `<div class="pt-1.5 border-t border-amber-200/80 space-y-1"><div class="text-[10px] font-black text-amber-900 uppercase">ประวัติการทำรายการล่าสุด:</div>${historyHtml}</div>` : ''}
+          `;
+        }
+      }
+
+      // Header inputs
+      const rawWEl = document.getElementById('approval-raw-worker');
+      if (rawWEl) rawWEl.textContent = sheet.rawWorkerName || '-';
+
+      const workers = PayrollDB.getWorkerMappings();
+      const selW = document.getElementById('approval-select-worker');
+      if (selW) {
+        selW.innerHTML = workers.map(w => `
+          <option value="${escapeHtml(w.code)}" ${w.code === sheet.workerCode ? 'selected' : ''}>
+            ${escapeHtml(w.name)} (${escapeHtml(w.code)} - แผนก${escapeHtml(w.dept)})
+          </option>
+        `).join('');
+      }
+
+      const appDeptBadge = document.getElementById('approval-worker-dept-badge');
+      if (appDeptBadge) {
+        if (sheet.workerDept === 'เย็บ') {
+          appDeptBadge.className = 'px-2 py-0.5 rounded text-[10px] font-black bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border border-emerald-300 cursor-pointer';
+          appDeptBadge.textContent = '🧵 แผนกช่างเย็บ (คลิกสลับ)';
+        } else {
+          appDeptBadge.className = 'px-2 py-0.5 rounded text-[10px] font-black bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 cursor-pointer';
+          appDeptBadge.textContent = '🔨 แผนกช่างหุ้ม (คลิกสลับ)';
+        }
+      }
+
+      const rawDateEl = document.getElementById('approval-raw-date');
+      if (rawDateEl) rawDateEl.textContent = sheet.rawDate || sheet.sheetDate;
+
+      const appInputDate = document.getElementById('approval-input-date');
+      if (appInputDate) appInputDate.value = sheet.sheetDate || '';
+
+      const appSelPeriod = document.getElementById('approval-select-period');
+      if (appSelPeriod) {
+        const periodKeys = buildPeriodOptionsList(sheet.sheetDate);
+        if (sheet.payrollPeriodKey && !periodKeys.includes(sheet.payrollPeriodKey)) {
+          periodKeys.unshift(sheet.payrollPeriodKey);
+        }
+        appSelPeriod.innerHTML = periodKeys.map(pk => {
+          const meta = PayrollDB.getPeriodMetaFromKey(pk);
+          return `<option value="${pk}" ${pk === sheet.payrollPeriodKey ? 'selected' : ''}>${meta.periodLabel}</option>`;
+        }).join('');
+      }
+
+      const appInputNote = document.getElementById('approval-input-note');
+      if (appInputNote) appInputNote.value = sheet.specialNote || '';
+
+      // Editable Items Table with Diff Highlighting
+      const tbodyItems = document.getElementById('tbody-approval-items');
+      const skuList = PayrollDB.getSkuMappings();
+      if (tbodyItems) {
+        tbodyItems.innerHTML = (sheet.items || []).map((item, idx) => {
+          const rowDiff = audit.rowDiffMap ? audit.rowDiffMap[idx] : null;
+          const rowBgCls = rowDiff ? 'bg-amber-50/90 hover:bg-amber-100/70' : 'hover:bg-slate-50';
+          const diffBadgeHtml = rowDiff
+            ? `<div class="mt-0.5 px-1.5 py-0.5 rounded bg-amber-200/80 text-amber-950 font-bold text-[10px]">✏️ ${escapeHtml(rowDiff.summary)}</div>`
+            : '';
+
+          const skuOptionsHtml = [
+            `<option value="">-- เลือก SKU --</option>`,
+            ...skuList.map(s => {
+              const rate = sheet.workerDept === 'เย็บ' ? s.sewingWage : s.upholsteryWage;
+              const isSel = String(item.matchedSku || '').toLowerCase() === s.model.toLowerCase();
+              return `<option value="${escapeHtml(s.model)}" ${isSel ? 'selected' : ''}>${escapeHtml(s.model.toUpperCase())} - ${escapeHtml(s.name)} (${rate}฿)</option>`;
+            })
+          ].join('');
+
+          return `
+            <tr class="${rowBgCls}" data-app-item-idx="${idx}">
+              <td class="py-1.5 px-2 text-center font-mono font-bold text-slate-500">${idx + 1}</td>
+              <td class="py-1.5 px-2">
+                <input type="text" class="app-item-raw w-full px-2 py-1 font-mono font-bold text-slate-900 bg-white border border-slate-300 rounded-lg text-xs" value="${escapeHtml(item.rawModel || '')}">
+                ${diffBadgeHtml}
+              </td>
+              <td class="py-1.5 px-2">
+                <select class="app-item-sku w-full px-2 py-1 font-bold rounded-lg border border-slate-300 bg-white text-slate-900 text-xs">
+                  ${skuOptionsHtml}
+                </select>
+              </td>
+              <td class="py-1.5 px-2">
+                <input type="text" class="app-item-color w-full px-2 py-1 font-mono text-slate-800 border border-slate-200 rounded-lg text-xs" value="${escapeHtml(item.color || '')}">
+              </td>
+              <td class="py-1.5 px-2">
+                <input type="number" min="1" class="app-item-qty w-full px-1.5 py-1 text-center font-mono font-black text-slate-900 border border-slate-300 rounded-lg text-xs" value="${item.qty || 1}">
+              </td>
+              <td class="py-1.5 px-2 text-right font-mono font-bold text-slate-700">${(item.unitRate || 0).toLocaleString()}</td>
+              <td class="py-1.5 px-2 text-right font-mono font-black text-emerald-700">${(item.lineTotal || 0).toLocaleString()}</td>
+              <td class="py-1.5 px-1 text-center">
+                <button type="button" class="btn-del-app-item text-rose-500 hover:text-rose-700 font-bold cursor-pointer" data-idx="${idx}">✕</button>
+              </td>
+            </tr>
+          `;
+        }).join('');
+
+        tbodyItems.querySelectorAll('.app-item-raw, .app-item-sku, .app-item-color, .app-item-qty').forEach(el => {
+          el.addEventListener('change', () => {
+            syncApprovalTableToSheetObject(sheet);
+            PayrollDB.upsertSheet(sheet, false, { actorRole: 'APPROVER', keepApprovedStatus: true });
+            refreshAllViews();
+          });
+        });
+
+        tbodyItems.querySelectorAll('.btn-del-app-item').forEach(btn => {
+          btn.addEventListener('click', () => {
+            syncApprovalTableToSheetObject(sheet);
+            const idx = parseInt(btn.getAttribute('data-idx'), 10);
+            sheet.items.splice(idx, 1);
+            PayrollDB.upsertSheet(sheet, false, { actorRole: 'APPROVER', keepApprovedStatus: true });
+            refreshAllViews();
+          });
+        });
+      }
+
+      const totU = document.getElementById('approval-total-units');
+      const totW = document.getElementById('approval-total-wage');
+      if (totU) totU.textContent = String(sheet.totalUnits || 0);
+      if (totW) totW.textContent = (sheet.totalWage || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 });
+    }
+
+    // Render Batch Approval Table (`#tbody-approval-list`)
+    const tbodyList = document.getElementById('tbody-approval-list');
+    if (tbodyList) {
+      if (filteredSheets.length === 0) {
+        tbodyList.innerHTML = `<tr><td colspan="9" class="py-8 text-center text-slate-400 font-bold">ไม่มีใบงานที่ตรงกับตัวกรองนี้</td></tr>`;
+      } else {
+        tbodyList.innerHTML = filteredSheets.map(s => {
+          const pMeta = PayrollDB.getPeriodMetaFromKey(s.payrollPeriodKey);
+          const stMeta = getStatusBadgeMeta(s.status);
+          const audit = PayrollDB.computeSheetAuditReport(s);
+          const isChecked = selectedApprovalSheetIds.has(s.id);
+          const isCurrent = sheet && sheet.id === s.id;
+
+          const auditCellHtml = audit.hasChanges
+            ? `<div class="space-y-0.5">
+                 <span class="inline-block px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 font-black text-[10px]">✏️ แก้ไข ${audit.totalDiffCount} จุด</span>
+                 <div class="text-[11px] text-slate-600 truncate max-w-xs" title="${escapeHtml((audit.netDiffs || []).map(d => d.summary).join(' | '))}">
+                   ${escapeHtml((audit.netDiffs || []).slice(0, 2).map(d => d.summary).join(' • ') || 'มีประวัติแก้ไขข้อมูล')}
+                 </div>
+               </div>`
+            : `<span class="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[10px]">✨ ตรงตาม AI 100%</span>`;
+
+          return `
+            <tr class="${isCurrent ? 'bg-teal-50/70' : 'hover:bg-slate-50'}">
+              <td class="py-2.5 px-3 text-center">
+                <input type="checkbox" class="chk-approval-row rounded text-emerald-600 cursor-pointer" data-sid="${s.id}" ${isChecked ? 'checked' : ''}>
+              </td>
+              <td class="py-2.5 px-3 font-mono font-bold text-slate-900">${escapeHtml(s.sheetDate)}</td>
+              <td class="py-2.5 px-3">
+                <span class="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">${escapeHtml(pMeta.periodLabel)}</span>
+              </td>
+              <td class="py-2.5 px-3 font-bold text-slate-900">
+                ${escapeHtml(s.workerName)} <span class="text-slate-400 font-mono text-[10px]">(${escapeHtml(s.workerCode)})</span>
+                <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-black ${s.workerDept === 'เย็บ' ? 'bg-emerald-100 text-emerald-900' : 'bg-amber-100 text-amber-900'}">${escapeHtml(s.workerDept || 'หุ้ม')}</span>
+              </td>
+              <td class="py-2.5 px-3 text-center font-mono font-black text-indigo-700">${s.totalUnits || 0}</td>
+              <td class="py-2.5 px-3 text-right font-mono font-black text-emerald-700">${(s.totalWage || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+              <td class="py-2.5 px-3">${auditCellHtml}</td>
+              <td class="py-2.5 px-3 text-center">
+                <span class="${stMeta.cls}">${stMeta.label}</span>
+              </td>
+              <td class="py-2.5 px-3 text-center">
+                <div class="flex items-center justify-center gap-1.5">
+                  <button type="button" class="btn-inspect-approval-row px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg font-bold text-[11px] cursor-pointer" data-sid="${s.id}">
+                    🔍 เปิดตรวจบน
+                  </button>
+                  ${s.status !== 'APPROVED' ? `
+                    <button type="button" class="btn-quick-approve-row px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-black text-[11px] shadow-sm cursor-pointer" data-sid="${s.id}">
+                      ✅ อนุมัติ
+                    </button>
+                  ` : ''}
+                </div>
+              </td>
+            </tr>
+          `;
+        }).join('');
+
+        tbodyList.querySelectorAll('.chk-approval-row').forEach(chk => {
+          chk.addEventListener('change', () => {
+            const sid = chk.getAttribute('data-sid');
+            if (chk.checked) selectedApprovalSheetIds.add(sid);
+            else selectedApprovalSheetIds.delete(sid);
+            const lbl = document.getElementById('label-selected-approve-count');
+            if (lbl) lbl.textContent = String(selectedApprovalSheetIds.size);
+          });
+        });
+
+        tbodyList.querySelectorAll('.btn-inspect-approval-row').forEach(btn => {
+          btn.addEventListener('click', () => {
+            activeApprovalSheetId = btn.getAttribute('data-sid');
+            renderApprovalWorkspace();
+            document.getElementById('approval-workspace')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          });
+        });
+
+        tbodyList.querySelectorAll('.btn-quick-approve-row').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const sid = btn.getAttribute('data-sid');
+            if (!ensureApproverUnlocked('อนุมัติใบงานนี้')) return;
+            PayrollDB.approveSheetsBatch([sid], 'ผู้มีอำนาจอนุมัติ');
+            refreshAllViews();
+          });
+        });
+      }
+    }
+  }
+
+  // ===========================================================================
+  // TAB 5: 15-DAY PAYROLL SUMMARY, SLIPS & EXCEL EXPORT (ONLY APPROVED SHEETS)
   // ===========================================================================
   function initPayrollSummaryUI() {
     const filterPeriod = document.getElementById('filter-payroll-period');
@@ -2114,6 +2963,7 @@
     const btnExport = document.getElementById('btn-export-payroll-excel');
     const btnCloseSlip = document.getElementById('btn-close-payslip');
     const btnPrintSlip = document.getElementById('btn-print-slip-now');
+    const btnGotoApproval = document.getElementById('btn-goto-approval-tab');
 
     [filterPeriod, filterDept].forEach(el => {
       if (el) el.addEventListener('change', renderPayrollDashboard);
@@ -2123,6 +2973,14 @@
     }
     if (btnExport) {
       btnExport.addEventListener('click', exportPayrollSummaryExcel);
+    }
+    if (btnGotoApproval) {
+      btnGotoApproval.addEventListener('click', () => {
+        const pVal = filterPeriod ? filterPeriod.value : 'ALL';
+        const appPeriodEl = document.getElementById('filter-approval-period');
+        if (appPeriodEl && pVal) appPeriodEl.value = pVal;
+        switchTab('approval');
+      });
     }
     if (btnCloseSlip) {
       btnCloseSlip.addEventListener('click', () => {
@@ -2146,7 +3004,7 @@
     const selectedDept = filterDept ? filterDept.value : 'ALL';
     const searchQ = (filterSearch ? filterSearch.value : '').trim().toLowerCase();
 
-    const filteredSheets = allSheets.filter(s => {
+    const matchingPeriodAndFilters = allSheets.filter(s => {
       if (selectedPeriod && selectedPeriod !== 'ALL' && s.payrollPeriodKey !== selectedPeriod) return false;
       if (selectedDept && selectedDept !== 'ALL' && s.workerDept !== selectedDept) return false;
       if (searchQ) {
@@ -2156,6 +3014,10 @@
       return true;
     });
 
+    const approvedSheets = matchingPeriodAndFilters.filter(s => s.status === 'APPROVED');
+    const unapprovedSheets = matchingPeriodAndFilters.filter(s => s.status !== 'APPROVED');
+    const unapprovedWage = unapprovedSheets.reduce((acc, s) => acc + (s.totalWage || 0), 0);
+
     const byWorkerMap = new Map();
     const masterWorkerMap = new Map(
       PayrollDB.getWorkerMappings().map(w => [String(w.code || '').toLowerCase(), w])
@@ -2164,7 +3026,7 @@
     let totalUphWage = 0;
     let totalSewWage = 0;
 
-    filteredSheets.forEach(s => {
+    approvedSheets.forEach(s => {
       const wKey = (s.workerCode || s.workerName || 'UNKNOWN').toLowerCase();
       const masterW = masterWorkerMap.get(String(s.workerCode || '').toLowerCase());
       const resolvedDept = (masterW && masterW.dept) ? masterW.dept : (s.workerDept || 'หุ้ม');
@@ -2203,9 +3065,12 @@
 
     return {
       selectedPeriod,
-      filteredSheets,
+      filteredSheets: matchingPeriodAndFilters,
+      approvedSheets,
+      unapprovedCount: unapprovedSheets.length,
+      unapprovedWage,
       workersList: Array.from(byWorkerMap.values()),
-      totalSheets: filteredSheets.length,
+      totalSheets: approvedSheets.length,
       totalUnits,
       totalUphWage,
       totalSewWage,
@@ -2231,6 +3096,20 @@
 
     const data = getFilteredPayrollData();
 
+    // Unapproved alert banner in Tab 5
+    const unapprovedAlert = document.getElementById('payroll-unapproved-alert');
+    const unapprovedCountEl = document.getElementById('payroll-unapproved-count');
+    const unapprovedWageEl = document.getElementById('payroll-unapproved-wage');
+    if (unapprovedAlert) {
+      if (data.unapprovedCount > 0) {
+        unapprovedAlert.classList.remove('hidden');
+        if (unapprovedCountEl) unapprovedCountEl.textContent = String(data.unapprovedCount);
+        if (unapprovedWageEl) unapprovedWageEl.textContent = data.unapprovedWage.toLocaleString('th-TH', { minimumFractionDigits: 2 });
+      } else {
+        unapprovedAlert.classList.add('hidden');
+      }
+    }
+
     document.getElementById('kpi-total-sheets').textContent = String(data.totalSheets);
     document.getElementById('kpi-total-units').textContent = String(data.totalUnits);
     document.getElementById('kpi-uph-wage').textContent = data.totalUphWage.toLocaleString('th-TH', { minimumFractionDigits: 2 });
@@ -2243,7 +3122,7 @@
         const meta = PayrollDB.getPeriodMetaFromKey(data.selectedPeriod);
         payBadge.textContent = `กำหนดโอนวันที่ ${meta.payDateLabel}`;
       } else {
-        payBadge.textContent = 'บาท (รวมทุกงวดที่เลือก)';
+        payBadge.textContent = 'บาท (เฉพาะใบที่อนุมัติแล้ว)';
       }
     }
 
@@ -2253,8 +3132,10 @@
       if (data.workersList.length === 0) {
         tbodyWorkers.innerHTML = `
           <tr>
-            <td colspan="7" class="py-8 text-center text-slate-400">
-              ยังไม่มีข้อมูลใบงานในงวดนี้ (ไปที่แท็บ 2 หรือ 3 เพื่อสแกนใบงานหรือโหลดใบงานตัวอย่างได้เลยครับ)
+            <td colspan="7" class="py-8 text-center text-slate-300 font-bold">
+              ${data.unapprovedCount > 0
+                ? `⚠️ มีใบงานในงวดนี้ ${data.unapprovedCount} ใบ แต่ยังไม่ได้รับการกด "✅ อนุมัติเข้าตั้งจ่าย" ในแท็บ 4 (กรุณาไปที่แท็บ 4 เพื่ออนุมัติใบงานก่อนออกสลิปจ่ายเงิน)`
+                : 'ยังไม่มีข้อมูลใบงานที่อนุมัติในงวดนี้'}
             </td>
           </tr>
         `;
@@ -2305,6 +3186,7 @@
       } else {
         tbodySheets.innerHTML = data.filteredSheets.map(s => {
           const pMeta = PayrollDB.getPeriodMetaFromKey(s.payrollPeriodKey);
+          const stMeta = getStatusBadgeMeta(s.status);
           return `
             <tr class="hover:bg-slate-50">
               <td class="py-2.5 px-3 font-mono text-[11px] text-slate-500">${escapeHtml(s.id)}</td>
@@ -2318,9 +3200,12 @@
               </td>
               <td class="py-2.5 px-3 text-center font-mono font-black text-indigo-700">${s.totalUnits || 0}</td>
               <td class="py-2.5 px-3 text-right font-mono font-black text-emerald-700">${(s.totalWage || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
-              <td class="py-2.5 px-3 text-amber-800 font-medium">${escapeHtml(s.specialNote || '-')}</td>
+              <td class="py-2.5 px-3">
+                <span class="${stMeta.cls}">${stMeta.label}</span>
+                ${s.specialNote ? `<div class="text-amber-800 font-medium mt-0.5">${escapeHtml(s.specialNote)}</div>` : ''}
+              </td>
               <td class="py-2.5 px-3 text-center">
-                <button type="button" class="btn-edit-sheet-from-payroll px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-bold text-xs" data-sid="${s.id}">
+                <button type="button" class="btn-edit-sheet-from-payroll px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-bold text-xs cursor-pointer" data-sid="${s.id}">
                   🔍 เปิดดู/แก้ไข
                 </button>
               </td>
@@ -2330,8 +3215,8 @@
 
         tbodySheets.querySelectorAll('.btn-edit-sheet-from-payroll').forEach(btn => {
           btn.addEventListener('click', () => {
-            activeSheetId = btn.getAttribute('data-sid');
-            switchTab('review');
+            activeApprovalSheetId = btn.getAttribute('data-sid');
+            switchTab('approval');
           });
         });
       }
@@ -2447,7 +3332,7 @@
     });
 
     const detailRows = [];
-    data.filteredSheets.forEach(s => {
+    (data.approvedSheets || []).forEach(s => {
       const pMeta = PayrollDB.getPeriodMetaFromKey(s.payrollPeriodKey);
       (s.items || []).forEach(it => {
         detailRows.push({
